@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Orbyte">
+	<defs>
+		<linearGradient id="background" x1="8" y1="4" x2="55" y2="60" gradientUnits="userSpaceOnUse">
+			<stop stop-color="#17277d"/>
+			<stop offset="1" stop-color="#020b32"/>
+		</linearGradient>
+		<linearGradient id="orbit" x1="10" y1="50" x2="57" y2="15" gradientUnits="userSpaceOnUse">
+			<stop stop-color="#159dff"/>
+			<stop offset="0.52" stop-color="#17e9ff"/>
+			<stop offset="1" stop-color="#43f1c8"/>
+		</linearGradient>
+		<linearGradient id="node" x1="44" y1="43" x2="58" y2="56" gradientUnits="userSpaceOnUse">
+			<stop stop-color="#31f3d2"/>
+			<stop offset="1" stop-color="#ff9f1c"/>
+		</linearGradient>
+		<filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+			<feGaussianBlur stdDeviation="1.4" result="blur"/>
+			<feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+		</filter>
+	</defs>
+	<rect x="2" y="2" width="60" height="60" rx="16" fill="url(#background)"/>
+	<ellipse cx="32" cy="32" rx="26" ry="14" transform="rotate(-18 32 32)" fill="none" stroke="url(#orbit)" stroke-width="4.5" filter="url(#glow)"/>
+	<path d="M27 23 18 32l9 9" fill="none" stroke="#20dcff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+	<path d="m37 23 9 9-9 9" fill="none" stroke="#36f0d1" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+	<path d="m44 44 7 7m-7 0 7-7" fill="none" stroke="url(#node)" stroke-width="1.6"/>
+	<circle cx="43" cy="44" r="3.2" fill="#21e7da"/>
+	<circle cx="44" cy="52" r="3.2" fill="#27dce5"/>
+	<circle cx="53" cy="51" r="3.2" fill="#ffad24"/>
+</svg>

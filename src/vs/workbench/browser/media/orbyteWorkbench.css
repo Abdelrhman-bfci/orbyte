@@ -1,0 +1,448 @@
+/*---------------------------------------------------------------------------------------------
+ *  Orbyte Horizon workbench
+ *
+ *  This layer deliberately styles only the IDE shell. Feature webviews and the floating
+ *  Orbyte AI surface keep their own visual language and are not affected by these rules.
+ *--------------------------------------------------------------------------------------------*/
+
+.monaco-workbench:not(.hc-black):not(.hc-light) {
+	--orbyte-accent: var(--vscode-focusBorder);
+	--orbyte-outline: color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
+	--orbyte-outline-strong: color-mix(in srgb, var(--vscode-foreground) 20%, transparent);
+	--orbyte-hover: color-mix(in srgb, var(--vscode-focusBorder) 10%, transparent);
+	--orbyte-selected: color-mix(in srgb, var(--vscode-focusBorder) 18%, var(--vscode-list-activeSelectionBackground));
+	--orbyte-elevated: color-mix(in srgb, var(--vscode-editorWidget-background) 92%, var(--vscode-focusBorder) 8%);
+	--orbyte-radius-xs: 5px;
+	--orbyte-radius-sm: 8px;
+	--orbyte-radius-md: 12px;
+	--orbyte-shadow: 0 8px 24px color-mix(in srgb, #000 24%, transparent);
+	--orbyte-transition: 120ms ease;
+}
+
+/* Window chrome and universal controls */
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.titlebar {
+	box-shadow: none;
+	border-bottom: 1px solid var(--orbyte-outline);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.titlebar > .titlebar-container {
+	padding-inline: 8px;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.titlebar .command-center .action-item.command-center-center {
+	height: 28px;
+	border-radius: 14px;
+	border-color: var(--orbyte-outline-strong);
+	box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 5%, transparent);
+	transition: border-color var(--orbyte-transition), box-shadow var(--orbyte-transition), background var(--orbyte-transition);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.titlebar .command-center .action-item.command-center-center:hover,
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.titlebar .command-center .action-item.command-center-center:focus-within {
+	border-color: var(--orbyte-accent);
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--orbyte-accent) 13%, transparent);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .monaco-button,
+.monaco-workbench:not(.hc-black):not(.hc-light) .monaco-text-button,
+.monaco-workbench:not(.hc-black):not(.hc-light) .monaco-inputbox,
+.monaco-workbench:not(.hc-black):not(.hc-light) .monaco-select-box {
+	border-radius: var(--orbyte-radius-xs);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .monaco-inputbox:focus-within {
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--orbyte-accent) 13%, transparent);
+}
+
+/* A slim tool rail with clear, independent destinations. */
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.activitybar {
+	box-shadow: inset -1px 0 0 var(--orbyte-outline);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.activitybar .action-item {
+	margin: 3px;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.activitybar .action-item > .action-label {
+	width: calc(var(--activity-bar-width, 48px) - 6px) !important;
+	height: calc(var(--activity-bar-action-height, 48px) - 6px) !important;
+	border-radius: 12px;
+	transition: color var(--orbyte-transition), background var(--orbyte-transition), transform var(--orbyte-transition);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.activitybar > .content :not(.monaco-menu) > .monaco-action-bar .action-label.codicon {
+	font-size: var(--activity-bar-icon-size, 28px);
+	-webkit-text-stroke: .18px currentColor;
+	text-shadow: 0 1px 8px color-mix(in srgb, currentColor 16%, transparent);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.activitybar > .content :not(.monaco-menu) > .monaco-action-bar .action-label.uri-icon {
+	background-size: var(--activity-bar-icon-size, 28px) var(--activity-bar-icon-size, 28px);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.activitybar .action-item:hover > .action-label {
+	background: var(--orbyte-hover);
+	transform: translateY(-1px);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.activitybar .action-item.checked > .action-label {
+	background: linear-gradient(145deg, color-mix(in srgb, var(--orbyte-accent) 28%, transparent), color-mix(in srgb, var(--vscode-button-background) 50%, transparent));
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--orbyte-accent) 46%, transparent), 0 5px 16px color-mix(in srgb, var(--orbyte-accent) 18%, transparent);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.activitybar .action-item.checked .active-item-indicator::before {
+	width: 3px;
+	height: 22px;
+	top: calc(50% - 11px);
+	left: -3px;
+	border: 0 !important;
+	border-radius: 0 4px 4px 0;
+	background: var(--orbyte-accent);
+	box-shadow: 0 0 10px color-mix(in srgb, var(--orbyte-accent) 65%, transparent);
+}
+
+/* Project tree icons are slightly larger than metadata icons and keep a stable column. */
+.monaco-workbench:not(.hc-black):not(.hc-light) .explorer-viewlet {
+	--file-icon-mask-size: 18px;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .explorer-viewlet .show-file-icons :is(.file-icon, .folder-icon, .rootfolder-icon)::before {
+	width: 20px;
+	font-size: 18px !important;
+	filter: drop-shadow(0 1px 4px color-mix(in srgb, currentColor 12%, transparent));
+}
+
+/* Tool windows: readable headings, calmer hierarchy, and card-like sections. */
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.sidebar {
+	box-shadow: inset -1px 0 0 var(--orbyte-outline);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.sidebar > .title {
+	padding-inline: 6px;
+	border-bottom: 1px solid var(--orbyte-outline);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.sidebar > .title > .title-label h2 {
+	font-size: 12px;
+	font-weight: 650;
+	letter-spacing: .02em;
+	text-transform: none;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.sidebar .pane-header {
+	margin: 4px 7px 2px;
+	width: calc(100% - 14px) !important;
+	border: 1px solid var(--orbyte-outline);
+	border-radius: var(--orbyte-radius-sm);
+	background: color-mix(in srgb, var(--vscode-sideBarSectionHeader-background) 88%, transparent);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.sidebar .pane-header:hover {
+	border-color: var(--orbyte-outline-strong);
+	background: var(--orbyte-hover);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.sidebar .monaco-list-row,
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.sidebar .monaco-tree-row {
+	border-radius: 6px;
+	margin-inline: 5px;
+	width: calc(100% - 10px) !important;
+	transition: background var(--orbyte-transition);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.sidebar .monaco-list-row.selected,
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.sidebar .monaco-tree-row.selected {
+	box-shadow: inset 3px 0 0 var(--orbyte-accent);
+}
+
+/* Editors use floating segmented tabs instead of a continuous browser-tab strip. */
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.editor > .content .editor-group-container > .title > .tabs-and-actions-container {
+	padding: 5px 6px 0;
+	border-bottom: 1px solid var(--orbyte-outline);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.editor > .content .editor-group-container > .title .tabs-container {
+	gap: 4px;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.editor > .content .editor-group-container > .title .tabs-container > .tab {
+	height: calc(var(--editor-group-tab-height) - 5px);
+	margin-top: 0;
+	border: 1px solid transparent !important;
+	border-radius: 9px 9px 0 0;
+	transition: background var(--orbyte-transition), border-color var(--orbyte-transition), color var(--orbyte-transition);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.editor > .content .editor-group-container > .title .tabs-container > .tab:hover:not(.active) {
+	background: var(--orbyte-hover);
+	border-color: var(--orbyte-outline) !important;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.editor > .content .editor-group-container > .title .tabs-container > .tab.active {
+	border-color: var(--orbyte-outline-strong) !important;
+	border-bottom-color: var(--vscode-editor-background) !important;
+	box-shadow: inset 0 2px 0 var(--orbyte-accent), 0 -4px 14px color-mix(in srgb, var(--orbyte-accent) 8%, transparent);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.editor .breadcrumbs-control {
+	border-bottom: 1px solid var(--orbyte-outline);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.editor .breadcrumbs-control .monaco-breadcrumb-item {
+	border-radius: 5px;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.editor .breadcrumbs-control .monaco-breadcrumb-item:hover {
+	background: var(--orbyte-hover);
+}
+
+/* The output area behaves as a dedicated tool window, not a second editor. */
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.panel {
+	box-shadow: inset 0 1px 0 var(--orbyte-outline);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.panel > .title {
+	padding-inline: 8px;
+	border-bottom: 1px solid var(--orbyte-outline);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.panel > .title .composite-bar .action-item {
+	margin: 4px 2px;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.panel > .title .composite-bar .action-item > .action-label {
+	padding-inline: 12px;
+	border-radius: 7px;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.panel > .title .composite-bar .action-item.checked > .action-label {
+	background: var(--orbyte-hover);
+}
+
+/* Compact context strip: status remains useful without becoming a second toolbar. */
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.statusbar {
+	box-shadow: inset 0 1px 0 color-mix(in srgb, var(--vscode-statusBar-foreground) 18%, transparent);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.statusbar .statusbar-item {
+	border-radius: 5px;
+	margin-block: 2px;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .part.statusbar .statusbar-item:hover {
+	background: color-mix(in srgb, var(--vscode-statusBar-foreground) 12%, transparent) !important;
+}
+
+/* Menus, pickers and notifications share one elevated surface language. */
+.monaco-workbench:not(.hc-black):not(.hc-light) .context-view .monaco-menu,
+.monaco-workbench:not(.hc-black):not(.hc-light) .quick-input-widget,
+.monaco-workbench:not(.hc-black):not(.hc-light) .notifications-center,
+.monaco-workbench:not(.hc-black):not(.hc-light) .notification-toast {
+	border: 1px solid var(--orbyte-outline-strong);
+	border-radius: var(--orbyte-radius-md);
+	box-shadow: var(--orbyte-shadow);
+	overflow: hidden;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .context-view .monaco-menu .action-item > .action-menu-item,
+.monaco-workbench:not(.hc-black):not(.hc-light) .quick-input-list .monaco-list-row {
+	border-radius: 6px;
+	margin-inline: 4px;
+	width: calc(100% - 8px) !important;
+}
+
+/* Version Control: a deliberate commit workflow with visible repository context. */
+.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view {
+	--orbyte-vcs-gutter: 9px;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .scm-provider {
+	margin: 6px var(--orbyte-vcs-gutter) 5px;
+	padding: 0 8px;
+	height: 34px;
+	border: 1px solid var(--orbyte-outline);
+	border-radius: var(--orbyte-radius-sm);
+	background: var(--orbyte-elevated);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .scm-provider > .monaco-icon-label {
+	font-weight: 650;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .scm-provider > .count {
+	border: 1px solid color-mix(in srgb, var(--orbyte-accent) 35%, transparent);
+	background: color-mix(in srgb, var(--orbyte-accent) 15%, transparent);
+	color: var(--vscode-foreground);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .scm-input {
+	padding: 5px var(--orbyte-vcs-gutter);
+	align-items: stretch;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .scm-editor {
+	min-height: 58px;
+	border-radius: var(--orbyte-radius-sm);
+	border-color: var(--orbyte-outline-strong);
+	background: var(--vscode-input-background);
+	box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 4%, transparent);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .scm-editor:focus-within,
+.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .scm-editor.synthetic-focus {
+	border-color: var(--orbyte-accent);
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--orbyte-accent) 13%, transparent);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .button-container {
+	height: 36px;
+	padding: 0 var(--orbyte-vcs-gutter) 5px;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .button-container .monaco-button {
+	font-weight: 650;
+	border-radius: 7px;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .monaco-list-row .resource-group {
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: .045em;
+	text-transform: uppercase;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .monaco-list-row:has(.resource-group) {
+	margin-top: 6px;
+	border-top: 1px solid var(--orbyte-outline);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .monaco-list-row:has(.resource) {
+	margin-inline: var(--orbyte-vcs-gutter);
+	width: calc(100% - (var(--orbyte-vcs-gutter) * 2)) !important;
+	border-radius: 6px;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .monaco-list-row:has(.resource):hover {
+	background: var(--orbyte-hover) !important;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .monaco-list-row .resource > .name > .monaco-icon-label::after {
+	border-radius: 5px;
+	padding-inline: 4px;
+	background: color-mix(in srgb, currentColor 13%, transparent);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .scm-history-view .history-item > .label-container > .label {
+	border: 1px solid var(--orbyte-outline);
+	background: var(--orbyte-elevated);
+}
+
+/* Empty Version Control is a compact launchpad, not a wall of documentation. */
+.monaco-workbench:not(.hc-black):not(.hc-light) .orbyte-scm-pane > .welcome-view {
+	padding: 0;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .orbyte-scm-pane .welcome-view-content {
+	width: 100%;
+	max-width: 390px;
+	margin: 0 auto;
+	padding: 22px 18px 28px;
+	align-items: stretch;
+	font-size: var(--vscode-fontSize-body2);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .orbyte-scm-pane .welcome-view-content::before {
+	content: '';
+	display: block;
+	width: 42px;
+	height: 42px;
+	margin-bottom: 18px;
+	border: 1px solid color-mix(in srgb, var(--orbyte-accent) 42%, transparent);
+	border-radius: 13px;
+	background:
+		radial-gradient(circle at 68% 30%, color-mix(in srgb, var(--orbyte-accent) 90%, #fff 10%) 0 3px, transparent 4px),
+		radial-gradient(circle at 31% 70%, color-mix(in srgb, var(--vscode-button-background) 82%, #fff 18%) 0 4px, transparent 5px),
+		linear-gradient(145deg, color-mix(in srgb, var(--orbyte-accent) 24%, transparent), color-mix(in srgb, var(--vscode-button-background) 32%, transparent));
+	box-shadow: 0 8px 22px color-mix(in srgb, var(--orbyte-accent) 13%, transparent), inset 0 1px 0 color-mix(in srgb, #fff 12%, transparent);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .orbyte-scm-pane .welcome-view-content > p {
+	width: auto;
+	margin: 0;
+	color: var(--vscode-descriptionForeground);
+	font-size: var(--vscode-fontSize-body2);
+	line-height: 1.55;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .orbyte-scm-pane .welcome-view-content > p:has(.codicon-git-branch),
+.monaco-workbench:not(.hc-black):not(.hc-light) .orbyte-scm-pane .welcome-view-content > p:has(.codicon-folder-opened),
+.monaco-workbench:not(.hc-black):not(.hc-light) .orbyte-scm-pane .welcome-view-content > p:has(.codicon-cloud) {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	margin-bottom: 7px;
+	color: var(--vscode-foreground);
+	font-size: var(--vscode-fontSize-body1);
+	font-weight: var(--vscode-fontWeight-semiBold);
+	line-height: 1.3;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .orbyte-scm-pane .welcome-view-content > p:has(.codicon-cloud) {
+	margin-top: 24px;
+	padding-top: 20px;
+	border-top: 1px solid var(--orbyte-outline);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .orbyte-scm-pane .welcome-view-content > p:has(.codicon) .codicon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	border-radius: 9px;
+	color: var(--orbyte-accent);
+	background: color-mix(in srgb, var(--orbyte-accent) 12%, transparent);
+	font-size: 16px;
+	line-height: 28px;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .orbyte-scm-pane .welcome-view-content > .button-container {
+	width: 100%;
+	max-width: none;
+	margin: 14px 0 10px;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .orbyte-scm-pane .welcome-view-content > .button-container > .monaco-button {
+	width: 100%;
+	max-width: none;
+	min-height: 38px;
+	padding: 7px 14px;
+	border: 1px solid color-mix(in srgb, var(--orbyte-accent) 34%, transparent);
+	border-radius: 9px;
+	font-size: var(--vscode-fontSize-body2);
+	font-weight: var(--vscode-fontWeight-semiBold);
+	box-shadow: 0 7px 18px color-mix(in srgb, var(--vscode-button-background) 18%, transparent), inset 0 1px 0 color-mix(in srgb, #fff 12%, transparent);
+	transition: transform var(--orbyte-transition), border-color var(--orbyte-transition), box-shadow var(--orbyte-transition);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .orbyte-scm-pane .welcome-view-content > .button-container > .monaco-button:hover {
+	transform: translateY(-1px);
+	border-color: var(--orbyte-accent);
+	box-shadow: 0 9px 22px color-mix(in srgb, var(--vscode-button-background) 24%, transparent), 0 0 0 3px color-mix(in srgb, var(--orbyte-accent) 10%, transparent);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .orbyte-scm-pane .welcome-view-content > .button-container:nth-of-type(n + 2) > .monaco-button {
+	color: var(--vscode-foreground);
+	background: var(--orbyte-elevated);
+	box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 7%, transparent);
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .orbyte-scm-pane .welcome-view-content > p a {
+	font-weight: var(--vscode-fontWeight-semiBold);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.monaco-workbench:not(.hc-black):not(.hc-light) * {
+		transition-duration: 0ms !important;
+	}
+}
