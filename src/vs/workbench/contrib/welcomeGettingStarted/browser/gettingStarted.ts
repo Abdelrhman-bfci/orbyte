@@ -78,6 +78,9 @@ import { AccessibilityVerbositySettingId } from '../../accessibility/browser/acc
 import { AccessibleViewAction } from '../../accessibility/browser/accessibleViewActions.js';
 import { KeybindingLabel } from '../../../../base/browser/ui/keybindingLabel/keybindingLabel.js';
 import { ScrollbarVisibility } from '../../../../base/common/scrollable.js';
+import { IRequestService } from '../../../../platform/request/common/request.js';
+import { ISecretStorageService } from '../../../../platform/secrets/common/secrets.js';
+import { OrbyteTaskDashboard } from './orbyteTaskDashboard.js';
 
 const SLIDE_TRANSITION_TIME_MS = 250;
 const configurationKey = 'workbench.startupEditor';
@@ -213,6 +216,8 @@ export class GettingStartedPage extends EditorPane {
 		@IMarkdownRendererService private readonly markdownRendererService: IMarkdownRendererService,
 		@IChatEntitlementService private readonly chatEntitlementService: IChatEntitlementService,
 		@IDefaultAccountService private readonly defaultAccountService: IDefaultAccountService,
+		@IRequestService private readonly requestService: IRequestService,
+		@ISecretStorageService private readonly secretStorageService: ISecretStorageService,
 	) {
 
 		super(GettingStartedPage.ID, group, telemetryService, themeService, storageService);
@@ -939,17 +944,42 @@ export class GettingStartedPage extends EditorPane {
 			onShowOnStartupChanged();
 		}));
 
-		const header = $('.header', {},
-			$('h1.product-name.caption', {}, this.productService.nameLong),
-			$('p.subtitle.description', {}, localize({ key: 'gettingStarted.editingEvolved', comment: ['Shown as subtitle on the Welcome page.'] }, "Editing evolved"))
-		);
-
-		const leftColumn = $('.categories-column.categories-column-left', {},);
-		const rightColumn = $('.categories-column.categories-column-right', {},);
-
 		const startList = this.buildStartList();
 		const recentList = this.buildRecentlyOpenedList();
 		const gettingStartedList = this.buildGettingStartedWalkthroughsList();
+
+		const newProjectButton = $('button.orbyte-dashboard-button.orbyte-new-project', { type: 'button' },
+			$('span', { class: ThemeIcon.asClassName(Codicon.newFolder), 'aria-hidden': 'true' }),
+			$('span', {}, localize('orbyte.welcome.newProject', "New Project")),
+		);
+		this.categoriesSlideDisposables.add(addDisposableListener(newProjectButton, 'click', () => {
+			void this.commandService.executeCommand('orbyte.spring.createProject');
+		}));
+
+		const startHost = $('.orbyte-workspace-panel.orbyte-workspace-start');
+		const recentHost = $('.orbyte-workspace-panel.orbyte-workspace-recent');
+		const walkthroughHost = $('.orbyte-workspace-panel.orbyte-workspace-guides');
+		const workspaceSection = $('.orbyte-dashboard-workspace', {},
+			$('.orbyte-section-heading.orbyte-workspace-heading', {},
+				$('div', {},
+					$('h3', {}, localize('orbyte.welcome.projectsAndWorkspace', "Projects & workspace")),
+					$('span', {}, localize('orbyte.welcome.projectsAndWorkspaceHint', "Create, reopen, or continue work without leaving your dashboard.")),
+				),
+				newProjectButton,
+			),
+			$('.orbyte-workspace-grid', {}, startHost, recentHost, walkthroughHost),
+		);
+		const taskDashboard = this.categoriesSlideDisposables.add(new OrbyteTaskDashboard(
+			this.requestService,
+			this.secretStorageService,
+			this.storageService,
+			this.quickInputService,
+			this.notificationService,
+			this.openerService,
+			this.commandService,
+			this.workspaceContextService,
+			workspaceSection,
+		));
 
 		const footerChildren: HTMLElement[] = [];
 		const agentsWindowGraphic = this.categoriesSlideDisposables.add(this.instantiationService.createInstance(AgentsWindowGraphic));
@@ -972,33 +1002,26 @@ export class GettingStartedPage extends EditorPane {
 		));
 
 		const footer = $('.footer', {}, ...footerChildren);
-		const categoriesContainer = $('.gettingStartedCategoriesContainer', {}, header, leftColumn, rightColumn, footer,);
+		const categoriesContainer = $('.gettingStartedCategoriesContainer', {}, taskDashboard.element, footer,);
 		const graphic = derived(reader => agentsBanner.visible.read(reader) ? agentsWindowGraphic.shownDesign.read(reader) : undefined);
 		const layoutAgentsWindowGraphic = () => this.fitAgentsWindowGraphic(categoriesContainer, graphic.get() !== undefined);
 
 		const layoutLists = () => {
+			reset(startHost, startList.getDomElement());
+			recentList.setLimit(8);
+			reset(recentHost, recentList.getDomElement());
 			if (gettingStartedList.itemCount) {
 				this.container.classList.remove('noWalkthroughs');
-				reset(rightColumn, gettingStartedList.getDomElement());
+				walkthroughHost.hidden = false;
+				reset(walkthroughHost, gettingStartedList.getDomElement());
 			}
 			else {
 				this.container.classList.add('noWalkthroughs');
-				reset(rightColumn);
+				walkthroughHost.hidden = true;
+				reset(walkthroughHost);
 			}
 			setTimeout(() => this.categoriesPageScrollbar?.scanDomNode(), 50);
-			layoutRecentList();
 			layoutAgentsWindowGraphic();
-		};
-
-		const layoutRecentList = () => {
-			if (this.container.classList.contains('noWalkthroughs')) {
-				recentList.setLimit(10);
-				reset(leftColumn, startList.getDomElement());
-				reset(rightColumn, recentList.getDomElement());
-			} else {
-				recentList.setLimit(5);
-				reset(leftColumn, startList.getDomElement(), recentList.getDomElement());
-			}
 		};
 
 		gettingStartedList.onDidChange(layoutLists);
