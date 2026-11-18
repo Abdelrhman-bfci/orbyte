@@ -28,8 +28,11 @@ if (process.arch !== arch) {
 }
 
 const task = `vscode-${targetPlatform}-${arch}${packageKind === 'user-setup' ? '-user-setup' : ''}`;
-const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
-const result = spawnSync(pnpm, ['run', 'gulp', task], { stdio: 'inherit' });
+const command = process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : 'pnpm';
+const args = process.platform === 'win32'
+	? ['/d', '/s', '/c', `pnpm.cmd run gulp ${task}`]
+	: ['run', 'gulp', task];
+const result = spawnSync(command, args, { stdio: 'inherit' });
 
 if (result.error) {
 	console.error(`[Orbyte] Failed to start ${task}: ${result.error.message}`);
