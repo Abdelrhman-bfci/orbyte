@@ -257,9 +257,10 @@
 }
 
 .monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .scm-provider {
-	margin: 6px var(--orbyte-vcs-gutter) 5px;
+	box-sizing: border-box;
+	margin: 4px var(--orbyte-vcs-gutter) 2px;
 	padding: 0 8px;
-	height: 34px;
+	height: calc(100% - 6px);
 	border: 1px solid var(--orbyte-outline);
 	border-radius: var(--orbyte-radius-sm);
 	background: var(--orbyte-elevated);
@@ -276,12 +277,13 @@
 }
 
 .monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .scm-input {
-	padding: 5px var(--orbyte-vcs-gutter);
+	box-sizing: border-box;
+	padding: 5px var(--orbyte-vcs-gutter) 3px;
 	align-items: stretch;
 }
 
 .monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .scm-editor {
-	min-height: 58px;
+	min-height: 0;
 	border-radius: var(--orbyte-radius-sm);
 	border-color: var(--orbyte-outline-strong);
 	background: var(--vscode-input-background);
@@ -295,8 +297,9 @@
 }
 
 .monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .button-container {
-	height: 36px;
-	padding: 0 var(--orbyte-vcs-gutter) 5px;
+	box-sizing: border-box;
+	height: 100%;
+	padding: 3px var(--orbyte-vcs-gutter) 5px;
 }
 
 .monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .button-container .monaco-button {
@@ -305,21 +308,40 @@
 }
 
 .monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .monaco-list-row .resource-group {
-	font-size: 11px;
-	font-weight: 700;
-	letter-spacing: .045em;
+	font-size: 12px;
+	font-weight: 650;
+	letter-spacing: .035em;
 	text-transform: uppercase;
 }
 
 .monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .monaco-list-row:has(.resource-group) {
-	margin-top: 6px;
+	box-sizing: border-box;
 	border-top: 1px solid var(--orbyte-outline);
+	border-bottom: 1px solid color-mix(in srgb, var(--orbyte-outline) 48%, transparent);
+	background: color-mix(in srgb, var(--orbyte-elevated) 72%, transparent);
 }
 
 .monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .monaco-list-row:has(.resource) {
-	margin-inline: var(--orbyte-vcs-gutter);
-	width: calc(100% - (var(--orbyte-vcs-gutter) * 2)) !important;
 	border-radius: 6px;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .monaco-list-row .resource,
+.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .monaco-list-row .resource > .name,
+.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .monaco-list-row .resource > .name > .monaco-icon-label-container {
+	height: 28px;
+	line-height: 28px;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .monaco-list-row .actions .action-label {
+	box-sizing: border-box;
+	width: 26px;
+	height: 26px;
+	padding: 4px;
+	border-radius: 6px;
+}
+
+.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .monaco-list-row .actions .action-label:hover {
+	background: color-mix(in srgb, var(--orbyte-accent) 14%, transparent);
 }
 
 .monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .monaco-list-row:has(.resource):hover {
@@ -328,7 +350,7 @@
 
 .monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .monaco-list-row .resource > .name > .monaco-icon-label::after {
 	border-radius: 5px;
-	padding-inline: 4px;
+	font-size: 11px;
 	background: color-mix(in srgb, currentColor 13%, transparent);
 }
 

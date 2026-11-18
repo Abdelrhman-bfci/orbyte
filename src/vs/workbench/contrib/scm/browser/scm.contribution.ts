@@ -241,7 +241,7 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 		'scm.alwaysShowActions': {
 			type: 'boolean',
 			description: localize('alwaysShowActions', "Controls whether inline actions are always visible in the Source Control view."),
-			default: true
+			default: false
 		},
 		'scm.countBadge': {
 			type: 'string',
@@ -318,7 +318,7 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 		'scm.alwaysShowRepositories': {
 			type: 'boolean',
 			markdownDescription: localize('alwaysShowRepository', "Controls whether repositories should always be visible in the Source Control view."),
-			default: true
+			default: false
 		},
 		'scm.repositories.sortOrder': {
 			type: 'string',
