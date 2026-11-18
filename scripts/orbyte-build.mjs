@@ -29,14 +29,24 @@ if (process.arch !== arch) {
 
 const task = `vscode-${targetPlatform}-${arch}${packageKind === 'user-setup' ? '-user-setup' : ''}`;
 const command = process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : 'pnpm';
-const args = process.platform === 'win32'
-	? ['/d', '/s', '/c', `pnpm.cmd run gulp ${task}`]
-	: ['run', 'gulp', task];
-const result = spawnSync(command, args, { stdio: 'inherit' });
+const tasks = packageKind === 'user-setup'
+	? [`vscode-win32-${arch}-inno-updater`, task]
+	: [task];
 
-if (result.error) {
-	console.error(`[Orbyte] Failed to start ${task}: ${result.error.message}`);
-	process.exit(1);
+for (const buildTask of tasks) {
+	const args = process.platform === 'win32'
+		? ['/d', '/s', '/c', `pnpm.cmd run gulp ${buildTask}`]
+		: ['run', 'gulp', buildTask];
+	const result = spawnSync(command, args, { stdio: 'inherit' });
+
+	if (result.error) {
+		console.error(`[Orbyte] Failed to start ${buildTask}: ${result.error.message}`);
+		process.exit(1);
+	}
+
+	if (result.status !== 0) {
+		process.exit(result.status ?? 1);
+	}
 }
 
-process.exit(result.status ?? 1);
+process.exit(0);
