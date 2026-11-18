@@ -54,6 +54,20 @@ jobs:
         shell: pwsh
         run: pnpm install --frozen-lockfile
 
+      - name: Add Windows SDK tools to PATH
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sdkBin = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
+          $signTool = Get-ChildItem -Path (Join-Path $sdkBin '*\x64\signtool.exe') -File |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $signTool) {
+            throw "Could not find the x64 Windows SDK signtool.exe under $sdkBin."
+          }
+          $signTool.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Append
+          Write-Host "Using Windows SDK tools from $($signTool.DirectoryName)"
+
       - name: Package native Windows x64 application
         shell: pwsh
         run: pnpm run orbyte:build:windows:x64
