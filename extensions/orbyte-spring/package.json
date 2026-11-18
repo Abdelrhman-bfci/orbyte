@@ -34,6 +34,8 @@
       { "command": "orbyte.spring.createProject", "title": "New Spring Boot Project…", "category": "Orbyte", "icon": "$(symbol-class)" },
       { "command": "orbyte.spring.run", "title": "Run Detected Java Project", "category": "Orbyte", "icon": "$(run)" },
       { "command": "orbyte.spring.debug", "title": "Debug Detected Java Project", "category": "Orbyte", "icon": "$(debug-alt)" },
+      { "command": "orbyte.spring.stop", "title": "Stop Running Java Project", "category": "Orbyte", "icon": "$(debug-stop)", "enablement": "orbyte.spring.applicationRunning" },
+      { "command": "orbyte.spring.restart", "title": "Restart Running Java Project", "category": "Orbyte", "icon": "$(debug-restart)", "enablement": "orbyte.spring.applicationRunning" },
       { "command": "orbyte.spring.build", "title": "Build Detected Java Project", "category": "Orbyte", "icon": "$(tools)" },
       { "command": "orbyte.spring.test", "title": "Test Detected Java Project", "category": "Orbyte", "icon": "$(beaker)" },
       { "command": "orbyte.spring.showProjectActions", "title": "Show Java Project Actions", "category": "Orbyte" },
@@ -51,12 +53,16 @@
         { "command": "orbyte.spring.createProject", "group": "project@1" }
       ],
       "editor/title": [
-        { "command": "orbyte.spring.run", "when": "resourceLangId == java && orbyte.spring.projectDetected", "group": "navigation@1" },
-        { "command": "orbyte.spring.debug", "when": "resourceLangId == java && orbyte.spring.projectDetected", "group": "navigation@2" }
+        { "command": "orbyte.spring.run", "when": "resourceLangId == java && orbyte.spring.projectDetected && !orbyte.spring.activeProjectRunning", "group": "navigation@1" },
+        { "command": "orbyte.spring.debug", "when": "resourceLangId == java && orbyte.spring.projectDetected && !orbyte.spring.activeProjectRunning", "group": "navigation@2" },
+        { "command": "orbyte.spring.stop", "when": "resourceLangId == java && orbyte.spring.activeProjectRunning", "group": "navigation@1" },
+        { "command": "orbyte.spring.restart", "when": "resourceLangId == java && orbyte.spring.activeProjectRunning", "group": "navigation@2" }
       ],
       "explorer/context": [
-        { "command": "orbyte.spring.run", "when": "orbyte.spring.projectDetected", "group": "orbyte@1" },
-        { "command": "orbyte.spring.debug", "when": "orbyte.spring.projectDetected", "group": "orbyte@2" },
+        { "command": "orbyte.spring.run", "when": "orbyte.spring.projectDetected && !orbyte.spring.applicationRunning", "group": "orbyte@1" },
+        { "command": "orbyte.spring.debug", "when": "orbyte.spring.projectDetected && !orbyte.spring.applicationRunning", "group": "orbyte@2" },
+        { "command": "orbyte.spring.stop", "when": "orbyte.spring.applicationRunning", "group": "orbyte@1" },
+        { "command": "orbyte.spring.restart", "when": "orbyte.spring.applicationRunning", "group": "orbyte@2" },
         { "command": "orbyte.spring.build", "when": "orbyte.spring.projectDetected", "group": "orbyte@3" },
         { "command": "orbyte.spring.test", "when": "orbyte.spring.projectDetected", "group": "orbyte@4" }
       ],
@@ -64,6 +70,8 @@
         { "command": "orbyte.spring.createProject" },
         { "command": "orbyte.spring.run", "when": "orbyte.spring.projectDetected" },
         { "command": "orbyte.spring.debug", "when": "orbyte.spring.projectDetected" },
+        { "command": "orbyte.spring.stop", "when": "orbyte.spring.applicationRunning" },
+        { "command": "orbyte.spring.restart", "when": "orbyte.spring.applicationRunning" },
         { "command": "orbyte.spring.build", "when": "orbyte.spring.projectDetected" },
         { "command": "orbyte.spring.test", "when": "orbyte.spring.projectDetected" },
         { "command": "orbyte.spring.showProjectActions", "when": "orbyte.spring.projectDetected" },

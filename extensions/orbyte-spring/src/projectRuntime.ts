@@ -9,6 +9,7 @@ import * as vscode from 'vscode';
 
 type BuildTool = 'maven' | 'gradle' | 'ant' | 'java';
 type ProjectAction = 'run' | 'debug' | 'build' | 'test';
+type ActiveApplicationMode = 'run' | 'debug';
 
 interface IJavaProject {
 	readonly folder: vscode.WorkspaceFolder;
@@ -43,6 +44,8 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 	private readonly disposables: vscode.Disposable[] = [];
 	private readonly codeLensChangedEmitter = new vscode.EventEmitter<void>();
 	private readonly statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 90);
+	private readonly runningTasks = new Map<string, vscode.TaskExecution>();
+	private readonly debugSessions = new Map<string, { readonly session: vscode.DebugSession; readonly mode: ActiveApplicationMode }>();
 	private projects: readonly IJavaProject[] = [];
 	private refreshTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -63,10 +66,16 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 			vscode.debug.registerDebugConfigurationProvider('java', this, vscode.DebugConfigurationProviderTriggerKind.Dynamic),
 			vscode.commands.registerCommand('orbyte.spring.run', (uri?: vscode.Uri) => this.execute('run', uri)),
 			vscode.commands.registerCommand('orbyte.spring.debug', (uri?: vscode.Uri) => this.execute('debug', uri)),
+			vscode.commands.registerCommand('orbyte.spring.stop', (uri?: vscode.Uri) => this.stop(uri)),
+			vscode.commands.registerCommand('orbyte.spring.restart', (uri?: vscode.Uri) => this.restart(uri)),
 			vscode.commands.registerCommand('orbyte.spring.build', (uri?: vscode.Uri) => this.execute('build', uri)),
 			vscode.commands.registerCommand('orbyte.spring.test', (uri?: vscode.Uri) => this.execute('test', uri)),
 			vscode.commands.registerCommand('orbyte.spring.refreshProjects', () => this.refresh(true)),
 			vscode.commands.registerCommand('orbyte.spring.showProjectActions', () => this.showProjectActions()),
+			vscode.tasks.onDidStartTask(event => this.trackTask(event.execution)),
+			vscode.tasks.onDidEndTask(event => this.untrackTask(event.execution)),
+			vscode.debug.onDidStartDebugSession(session => this.trackDebugSession(session)),
+			vscode.debug.onDidTerminateDebugSession(session => this.untrackDebugSession(session)),
 			vscode.window.onDidChangeActiveTextEditor(() => this.updateStatusBar()),
 			vscode.workspace.onDidChangeWorkspaceFolders(() => this.scheduleRefresh()),
 			vscode.workspace.onDidChangeConfiguration(event => {
@@ -88,7 +97,14 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 	}
 
 	async start(): Promise<void> {
+		for (const execution of vscode.tasks.taskExecutions) {
+			this.trackTask(execution, false);
+		}
+		if (vscode.debug.activeDebugSession) {
+			this.trackDebugSession(vscode.debug.activeDebugSession, false);
+		}
 		await this.refresh(false);
+		this.updateApplicationState();
 	}
 
 	dispose(): void {
@@ -109,6 +125,21 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 		const annotationMatch = /@SpringBootApplication\b/.exec(text);
 		const offset = annotationMatch?.index ?? mainMatch?.index ?? 0;
 		const range = new vscode.Range(document.positionAt(offset), document.positionAt(offset));
+		const project = this.projectForUri(document.uri);
+		if (project && this.activeMode(project)) {
+			return [
+				new vscode.CodeLens(range, {
+					title: '$(debug-stop) Stop Spring Boot',
+					command: 'orbyte.spring.stop',
+					arguments: [document.uri],
+				}),
+				new vscode.CodeLens(range, {
+					title: '$(debug-restart) Restart Spring Boot',
+					command: 'orbyte.spring.restart',
+					arguments: [document.uri],
+				}),
+			];
+		}
 		return [
 			new vscode.CodeLens(range, {
 				title: '$(run) Run Spring Boot',
@@ -171,12 +202,22 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 
 	private updateStatusBar(): void {
 		const project = this.projectForUri(vscode.window.activeTextEditor?.document.uri) ?? this.projects[0];
+		const activeMode = project ? this.activeMode(project) : undefined;
+		void vscode.commands.executeCommand('setContext', 'orbyte.spring.activeProjectRunning', Boolean(activeMode));
 		const enabled = vscode.workspace.getConfiguration('orbyte.java').get('showStatusBar', true);
 		if (!project || !enabled) {
 			this.statusBar.hide();
 			return;
 		}
 		const framework = project.springBoot ? 'Spring Boot' : 'Java';
+		if (activeMode) {
+			this.statusBar.text = `$(debug-stop) Stop ${activeMode === 'debug' ? 'Debug' : framework} · ${project.name}`;
+			this.statusBar.tooltip = `${project.name} is ${activeMode === 'debug' ? 'being debugged' : 'running'}\nClick to stop the application`;
+			this.statusBar.command = 'orbyte.spring.stop';
+			this.statusBar.show();
+			return;
+		}
+		this.statusBar.command = 'orbyte.spring.showProjectActions';
 		this.statusBar.text = `$(run-all) ${framework} · ${buildToolLabel(project.buildTool)}`;
 		this.statusBar.tooltip = `${project.name}\nRun, debug, build, or test this project`;
 		this.statusBar.show();
@@ -187,14 +228,26 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 		if (!project) {
 			return;
 		}
+		const activeMode = this.activeMode(project);
 		const choice = await vscode.window.showQuickPick([
-			{ label: '$(run) Run', description: runDescription(project), action: 'run' as const },
-			{ label: '$(debug-alt) Debug', description: project.mainClass ?? 'Detect main class', action: 'debug' as const },
+			...(activeMode ? [
+				{ label: '$(debug-stop) Stop', description: `${project.name} is ${activeMode === 'debug' ? 'being debugged' : 'running'}`, action: 'stop' as const },
+				{ label: '$(debug-restart) Restart', description: `Restart in ${activeMode} mode`, action: 'restart' as const },
+			] : [
+				{ label: '$(run) Run', description: runDescription(project), action: 'run' as const },
+				{ label: '$(debug-alt) Debug', description: project.mainClass ?? 'Detect main class', action: 'debug' as const },
+			]),
 			{ label: '$(tools) Build', description: buildToolLabel(project.buildTool), action: 'build' as const },
 			{ label: '$(beaker) Test', description: buildToolLabel(project.buildTool), action: 'test' as const },
 		], { title: `${project.name} · ${project.springBoot ? 'Spring Boot' : 'Java'} · ${buildToolLabel(project.buildTool)}` });
 		if (choice) {
-			await this.execute(choice.action, project.root);
+			if (choice.action === 'stop') {
+				await this.stopProject(project);
+			} else if (choice.action === 'restart') {
+				await this.restartProject(project);
+			} else {
+				await this.execute(choice.action, project.root);
+			}
 		}
 	}
 
@@ -202,6 +255,19 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 		const project = await this.pickProject(uri ?? vscode.window.activeTextEditor?.document.uri);
 		if (!project) {
 			void vscode.window.showWarningMessage('Open a Maven, Gradle, Ant, or Java application project first.');
+			return;
+		}
+		if ((action === 'run' || action === 'debug') && this.activeMode(project)) {
+			const selected = await vscode.window.showInformationMessage(
+				`${project.name} is already running.`,
+				'Restart',
+				'Stop',
+			);
+			if (selected === 'Restart') {
+				await this.restartProject(project);
+			} else if (selected === 'Stop') {
+				await this.stopProject(project);
+			}
 			return;
 		}
 		if (action === 'debug') {
@@ -212,7 +278,109 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 			await this.startJava(project, true);
 			return;
 		}
-		await vscode.tasks.executeTask(this.createTask(project, action));
+		const execution = await vscode.tasks.executeTask(this.createTask(project, action));
+		if (action === 'run') {
+			this.trackTask(execution);
+		}
+	}
+
+	private async stop(uri?: vscode.Uri): Promise<void> {
+		const project = await this.pickActiveProject(uri ?? vscode.window.activeTextEditor?.document.uri, 'stop');
+		if (!project) {
+			void vscode.window.showInformationMessage('No Orbyte Java application is currently running.');
+			return;
+		}
+		await this.stopProject(project);
+	}
+
+	private async restart(uri?: vscode.Uri): Promise<void> {
+		const project = await this.pickActiveProject(uri ?? vscode.window.activeTextEditor?.document.uri, 'restart');
+		if (!project) {
+			void vscode.window.showInformationMessage('No Orbyte Java application is currently running.');
+			return;
+		}
+		await this.restartProject(project);
+	}
+
+	private async restartProject(project: IJavaProject): Promise<void> {
+		const mode = this.activeMode(project);
+		if (!mode) {
+			return;
+		}
+		await this.stopProject(project);
+		await this.execute(mode, project.root);
+	}
+
+	private async stopProject(project: IJavaProject): Promise<void> {
+		const key = normalizePath(project.root.fsPath);
+		const task = this.runningTasks.get(key);
+		const debugSession = this.debugSessions.get(key)?.session;
+		this.runningTasks.delete(key);
+		this.debugSessions.delete(key);
+		this.updateApplicationState();
+		await Promise.all([
+			task ? terminateTask(task) : Promise.resolve(),
+			debugSession ? stopDebugSession(debugSession) : Promise.resolve(),
+		]);
+	}
+
+	private trackTask(execution: vscode.TaskExecution, update = true): void {
+		const definition = execution.task.definition as { type?: string; action?: string; project?: string };
+		if (definition.type !== 'orbyte-java' || definition.action !== 'run' || typeof definition.project !== 'string') {
+			return;
+		}
+		this.runningTasks.set(normalizePath(definition.project), execution);
+		if (update) {
+			this.updateApplicationState();
+		}
+	}
+
+	private untrackTask(execution: vscode.TaskExecution): void {
+		const definition = execution.task.definition as { type?: string; action?: string; project?: string };
+		if (definition.type !== 'orbyte-java' || definition.action !== 'run' || typeof definition.project !== 'string') {
+			return;
+		}
+		const key = normalizePath(definition.project);
+		if (this.runningTasks.get(key) === execution) {
+			this.runningTasks.delete(key);
+			this.updateApplicationState();
+		}
+	}
+
+	private trackDebugSession(session: vscode.DebugSession, update = true): void {
+		const project = session.configuration.orbyteProject;
+		const mode = session.configuration.orbyteMode;
+		if (typeof project !== 'string' || (mode !== 'run' && mode !== 'debug')) {
+			return;
+		}
+		this.debugSessions.set(normalizePath(project), { session, mode });
+		if (update) {
+			this.updateApplicationState();
+		}
+	}
+
+	private untrackDebugSession(session: vscode.DebugSession): void {
+		for (const [project, active] of this.debugSessions) {
+			if (active.session.id === session.id) {
+				this.debugSessions.delete(project);
+				this.updateApplicationState();
+				return;
+			}
+		}
+	}
+
+	private activeMode(project: IJavaProject): ActiveApplicationMode | undefined {
+		const key = normalizePath(project.root.fsPath);
+		return this.debugSessions.get(key)?.mode ?? (this.runningTasks.has(key) ? 'run' : undefined);
+	}
+
+	private updateApplicationState(): void {
+		const running = this.runningTasks.size > 0 || this.debugSessions.size > 0;
+		const debugging = Array.from(this.debugSessions.values()).some(active => active.mode === 'debug');
+		void vscode.commands.executeCommand('setContext', 'orbyte.spring.applicationRunning', running);
+		void vscode.commands.executeCommand('setContext', 'orbyte.spring.applicationDebugging', debugging);
+		this.codeLensChangedEmitter.fire();
+		this.updateStatusBar();
 	}
 
 	private async startJava(project: IJavaProject, noDebug: boolean): Promise<void> {
@@ -245,6 +413,8 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 			cwd: project.root.fsPath,
 			console: 'integratedTerminal',
 			noDebug,
+			orbyteProject: project.root.fsPath,
+			orbyteMode: noDebug ? 'run' : 'debug',
 		};
 	}
 
@@ -292,6 +462,68 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 		})), { title: 'Select the project to run' });
 		return selection?.project;
 	}
+
+	private async pickActiveProject(uri: vscode.Uri | undefined, action: 'stop' | 'restart'): Promise<IJavaProject | undefined> {
+		const contextual = this.projectForUri(uri);
+		if (contextual && this.activeMode(contextual)) {
+			return contextual;
+		}
+		const activeProjects = this.projects.filter(project => this.activeMode(project));
+		if (activeProjects.length <= 1) {
+			return activeProjects[0];
+		}
+		const selection = await vscode.window.showQuickPick(activeProjects.map(project => ({
+			label: project.name,
+			description: `${this.activeMode(project) === 'debug' ? 'Debugging' : 'Running'} · ${buildToolLabel(project.buildTool)}`,
+			detail: vscode.workspace.asRelativePath(project.root, false),
+			project,
+		})), { title: `Select the application to ${action}` });
+		return selection?.project;
+	}
+}
+
+function terminateTask(execution: vscode.TaskExecution): Promise<void> {
+	return new Promise(resolve => {
+		let completed = false;
+		const finish = () => {
+			if (completed) {
+				return;
+			}
+			completed = true;
+			clearTimeout(timeout);
+			disposable.dispose();
+			resolve();
+		};
+		const disposable = vscode.tasks.onDidEndTask(event => {
+			if (event.execution === execution) {
+				finish();
+			}
+		});
+		const timeout = setTimeout(finish, 5000);
+		execution.terminate();
+	});
+}
+
+function stopDebugSession(session: vscode.DebugSession): Promise<void> {
+	return new Promise(resolve => {
+		let completed = false;
+		const finish = () => {
+			if (completed) {
+				return;
+			}
+			completed = true;
+			clearTimeout(timeout);
+			disposable.dispose();
+			resolve();
+		};
+		const disposable = vscode.debug.onDidTerminateDebugSession(terminated => {
+			if (terminated.id === session.id) {
+				finish();
+			}
+		});
+		const timeout = setTimeout(finish, 5000);
+		void vscode.debug.stopDebugging(session).then(finish, finish);
+	});
 }
 
 async function discoverProjects(): Promise<readonly IJavaProject[]> {
