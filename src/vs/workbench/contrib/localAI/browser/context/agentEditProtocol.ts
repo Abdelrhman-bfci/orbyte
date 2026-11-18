@@ -106,6 +106,18 @@ function insertBeforePythonMain(originalText: string, addition: string): string 
 	return `${beforeMain}\n\n${normalizedAddition}\n\n${mainAndAfter}\n`;
 }
 
+function isCompleteJavaCreate(uri: string, content: string, instruction: string): boolean {
+	const decodedUri = decodeXml(uri).trim().split(/[?#]/, 1)[0];
+	const fileName = basename(decodedUri);
+	if (!fileName.toLowerCase().endsWith('.java')) {
+		return false;
+	}
+	const expectedType = fileName.slice(0, -'.java'.length);
+	const code = javaCodeWithoutCommentsOrStrings(content);
+	const matchingType = new RegExp(`\\b(?:(?:public|protected|private|abstract|final|sealed|non-sealed|static)\\s+)*(?:class|interface|record|enum)\\s+${escapeRegExp(expectedType)}\\b`).test(code);
+	return matchingType && !validateJavaStructure(content, instruction);
+}
+
 /**
  * Parses targeted Agent edits and applies them to snapshots in memory. Each file is transactional:
  * if any search block is missing or ambiguous, no proposal is returned for that file.
@@ -114,6 +126,8 @@ export function parseLocalAIAgentResponse(response: string, targets: readonly IL
 	const summaryMatch = /<summary>([\s\S]*?)<\/summary>/i.exec(response);
 	const summary = summaryMatch ? decodeXml(summaryMatch[1].trim()) : '';
 	const errors: string[] = [];
+	const creates: ILocalAIAgentCreateProposal[] = [];
+	const createdUris = new Set<string>();
 	const editGroups = new Map<string, { target: ILocalAIAgentTargetSnapshot; operations: AgentEditOperation[] }>();
 	const editPattern = /<edit\s+[^>]*(?:path|uri)\s*=\s*(["'])(.*?)\1[^>]*>([\s\S]*?)<\/edit>/gi;
 	for (const match of response.matchAll(editPattern)) {
@@ -140,12 +154,25 @@ export function parseLocalAIAgentResponse(response: string, targets: readonly IL
 
 	const insertPattern = /<insert\s+[^>]*(?:path|uri)\s*=\s*(["'])(.*?)\1[^>]*position\s*=\s*(["'])before_main\3[^>]*>([\s\S]*?)<\/insert>/gi;
 	for (const match of response.matchAll(insertPattern)) {
+		const uri = decodeXml(match[2]).trim();
+		const content = elementContent(match[4]);
 		const target = resolveTarget(match[2], targets);
 		if (!target) {
-			errors.push(`Unknown insert target: ${decodeXml(match[2])}`);
+			// Small local models sometimes use Python's insert operation while creating
+			// a Java file. Recover only a complete, structurally valid compilation unit;
+			// the orchestrator still enforces task ownership and workspace boundaries.
+			if (isCompleteJavaCreate(uri, content, instruction)) {
+				if (createdUris.has(uri)) {
+					errors.push(`Duplicate create target: ${uri}`);
+				} else {
+					createdUris.add(uri);
+					creates.push({ uri, content });
+				}
+				continue;
+			}
+			errors.push(`Unknown insert target: ${uri}`);
 			continue;
 		}
-		const content = elementContent(match[4]);
 		if (target.displayPath.toLowerCase().endsWith('.java')) {
 			const group = editGroups.get(target.id) ?? { target, operations: [] };
 			const imports = javaImportsFromBlock(content);
@@ -250,8 +277,6 @@ export function parseLocalAIAgentResponse(response: string, targets: readonly IL
 		}
 	}
 
-	const creates: ILocalAIAgentCreateProposal[] = [];
-	const createdUris = new Set<string>();
 	const createPattern = /<create\s+[^>]*(?:path|uri)\s*=\s*(["'])(.*?)\1[^>]*>([\s\S]*?)<\/create>/gi;
 	for (const match of response.matchAll(createPattern)) {
 		const uri = decodeXml(match[2]).trim();

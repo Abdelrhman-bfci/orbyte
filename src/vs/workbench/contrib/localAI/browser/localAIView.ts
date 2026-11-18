@@ -37,6 +37,7 @@ import { IQuickInputService, IQuickPickItem } from '../../../../platform/quickin
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+import { getLocalLLMGenerationTokens, localLLMMinimumContextTokens } from '../../../../platform/localLLM/common/localLLMContextProfile.js';
 import { ViewPane } from '../../../browser/parts/views/viewPane.js';
 import { IViewletViewOptions } from '../../../browser/parts/views/viewsViewlet.js';
 import { IViewDescriptorService } from '../../../common/views.js';
@@ -46,6 +47,7 @@ import { ITextFileService } from '../../../services/textfile/common/textfiles.js
 import { parseLocalAIAgentResponse, validateLocalAIAgentProposal } from './context/agentEditProtocol.js';
 import { ILocalAIContext, ILocalAIContextService } from './context/localAIContext.js';
 import { formatAgentFeatureImplementerMessages, formatAgentFeatureReviewerMessages, formatAgentRepairMessages, formatAgentTaskPlannerMessages, formatAgentTesterMessages, formatChatMessages, ILocalAIAgentFeatureTask, ILocalAIAttachment, ILocalAIWorkspaceRootContext, LocalAIChatMode } from './context/promptFormatter.js';
+import { localAIContextTokens, scoreLocalAIWorkspacePath } from './context/smartWorkspaceContext.js';
 import { InlineEditController } from './inlineEditController.js';
 
 export interface ILocalAIViewPaneOptions extends IViewletViewOptions {
@@ -110,6 +112,7 @@ interface IAgentFeatureTask {
 	readonly dependsOn?: readonly string[];
 	readonly needsTests: boolean;
 	targets: readonly IAgentTarget[];
+	references: readonly IAgentTarget[];
 	implementerResponse?: string;
 	candidateResponse?: string;
 	reviewerResponses: string[];
@@ -162,25 +165,7 @@ const maximumAttachmentBytes = 64 * 1024;
 const maximumAttachedFiles = 8;
 const maximumAutoDetectedFiles = 4;
 const agentRequestInactivityTimeout = 120_000;
-const smartContextStopWords = new Set([
-	'add', 'change', 'code', 'create', 'delete', 'directory', 'edit', 'file', 'files', 'fix', 'folder', 'from', 'implement', 'inside',
-	'into', 'make', 'module', 'new', 'other', 'package', 'project', 'remove', 'same', 'source', 'src', 'that', 'the', 'this', 'update',
-	'with', 'java', 'python', 'typescript', 'javascript', 'xml', 'json', 'yaml', 'yml',
-]);
-
-function smartContextTokens(value: string): Set<string> {
-	return new Set(value
-		.replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-		.toLowerCase()
-		.split(/[^a-z0-9]+/)
-		.filter(token => token.length >= 3 && !smartContextStopWords.has(token)));
-}
-
-function nameWithoutExtension(value: string): string {
-	const extensionIndex = value.indexOf('.');
-	return extensionIndex > 0 ? value.slice(0, extensionIndex) : value;
-}
-
+const maximumInitialPromptTimeout = 30 * 60_000;
 export class LocalAIViewPane extends ViewPane {
 
 	static readonly ID = 'workbench.view.localAI';
@@ -915,8 +900,7 @@ export class LocalAIViewPane extends ViewPane {
 			return;
 		}
 
-		const normalizedPrompt = value.toLowerCase().replaceAll('\\', '/');
-		const promptTokens = smartContextTokens(value);
+		const promptTokens = localAIContextTokens(value);
 		if (!promptTokens.size && !/[./\\]/.test(value)) {
 			return;
 		}
@@ -931,48 +915,10 @@ export class LocalAIViewPane extends ViewPane {
 			.filter(resource => resource.toString() !== activeResource && !this._pendingAttachments.some(attachment => attachment.uri === resource.toString()))
 			.map(resource => {
 				const path = this._workspaceRelativePath(resource);
-				const normalizedPath = path.toLowerCase().replaceAll('\\', '/');
-				const fileName = basename(resource).toLowerCase();
-				const stem = nameWithoutExtension(fileName);
-				const fileTokens = smartContextTokens(basename(resource));
-				const pathTokens = smartContextTokens(normalizedPath.slice(0, Math.max(0, normalizedPath.length - fileName.length)));
-				let score = 0;
-
-				if (normalizedPath.length >= 4 && normalizedPrompt.includes(normalizedPath)) {
-					score += 320;
-				}
-				if (fileName.length >= 4 && normalizedPrompt.includes(fileName)) {
-					score += 260;
-				}
-				if (stem.length >= 4 && normalizedPrompt.includes(stem)) {
-					score += 170;
-				}
-				for (const token of fileTokens) {
-					if (promptTokens.has(token)) {
-						score += 70;
-					}
-				}
-				for (const token of pathTokens) {
-					if (promptTokens.has(token)) {
-						score += folderRequested ? 60 : 28;
-					}
-				}
-
-				if (/\b(maven|pom)\b/i.test(value) && fileName === 'pom.xml') {
-					score += 260;
-				}
-				if (/\bgradle\b/i.test(value) && /^(build|settings)\.gradle(?:\.kts)?$/.test(fileName)) {
-					score += 260;
-				}
-				if (/\b(dependency|dependencies|build tool)\b/i.test(value) && /^(pom\.xml|build\.gradle(?:\.kts)?|settings\.gradle(?:\.kts)?)$/.test(fileName)) {
-					score += 180;
-				}
-				if (/\b(config|configuration|properties)\b/i.test(value) && /^application(?:-[^.]+)?\.(?:properties|ya?ml)$/.test(fileName)) {
-					score += 180;
-				}
-				if (openResources.has(resource.toString()) && score > 0) {
-					score += 20;
-				}
+				const score = scoreLocalAIWorkspacePath(value, path, {
+					folderRequested,
+					open: openResources.has(resource.toString()),
+				});
 
 				return { resource, path, score };
 			})
@@ -1115,11 +1061,12 @@ export class LocalAIViewPane extends ViewPane {
 		this._preparingRequest = false;
 		this._emitActivity();
 		try {
-			this._requestWatchdog.schedule();
+			const messages = formatChatMessages(context, value, history, mode, attachments, workspaceRoots, this._contextWindowTokens());
+			this._scheduleInitialRequestWatchdog(messages);
 			await this._localLLMService.streamChat({
 				requestId,
-				messages: formatChatMessages(context, value, history, mode, attachments, workspaceRoots),
-				maxTokens: 2048,
+				messages,
+				maxTokens: getLocalLLMGenerationTokens(this._contextWindowTokens(), mode === 'plan' ? 'planner' : 'chat'),
 				temperature: mode === 'plan' ? 0.15 : 0.2,
 			});
 		} catch (error) {
@@ -1145,6 +1092,22 @@ export class LocalAIViewPane extends ViewPane {
 			return memoryBytes >= 16 * 1024 ** 3 ? 6 : 5;
 		}
 		return memoryBytes >= 12 * 1024 ** 3 ? 4 : 3;
+	}
+
+	private _contextWindowTokens(): number {
+		return this._modelCatalog?.models.find(model => model.selected)?.contextWindowTokens ?? localLLMMinimumContextTokens;
+	}
+
+	private _scheduleInitialRequestWatchdog(messages: readonly ILocalLLMChatMessage[]): void {
+		// llama.cpp emits the first stream token only after evaluating the complete
+		// prompt. Large coding contexts can legitimately need several minutes on
+		// an 8 GB machine. Once streaming begins, the normal inactivity timeout is
+		// restored by the token listener.
+		const approximatePromptTokens = messages.reduce((total, message) => total + message.content.length, 0) / 3;
+		const selectedParameters = Number.parseFloat(this._modelCatalog?.models.find(model => model.selected)?.parameters ?? '3');
+		const estimatedPromptThroughput = selectedParameters >= 32 ? 12 : selectedParameters >= 14 ? 25 : selectedParameters >= 7 ? 45 : 70;
+		const estimatedPromptTime = approximatePromptTokens / estimatedPromptThroughput * 1000 + 60_000;
+		this._requestWatchdog.schedule(Math.min(maximumInitialPromptTimeout, Math.max(agentRequestInactivityTimeout, Math.ceil(estimatedPromptTime))));
 	}
 
 	private async _startAgentSubagent(base: Omit<IPendingAgentRequest, 'requestId' | 'stage'>, stage: AgentSubagentStage, messages: readonly ILocalLLMChatMessage[]): Promise<void> {
@@ -1180,12 +1143,13 @@ export class LocalAIViewPane extends ViewPane {
 		this._storeHistory();
 		this._renderMessages();
 		try {
-			this._requestWatchdog.schedule();
-			const maxTokens = stage === 'planner'
-				? 768
+			this._scheduleInitialRequestWatchdog(messages);
+			const taskKind = stage === 'planner'
+				? 'planner'
 				: stage === 'tester' || stage === 'integrationTester' || (stage === 'reviewer' && base.reviewKind === 'analysis')
-					? 768
-					: 3072;
+					? 'analysis'
+					: 'implementer';
+			const maxTokens = getLocalLLMGenerationTokens(this._contextWindowTokens(), taskKind);
 			await this._localLLMService.streamChat({
 				requestId,
 				messages,
@@ -1200,6 +1164,7 @@ export class LocalAIViewPane extends ViewPane {
 			this._setInputEnabled(true);
 			if (response?.role === 'assistant') {
 				this._setAgentStep(response, stage, 'failed', localize('localAISubagentFailedDetail', "Could not start: {0}", error instanceof Error ? error.message : String(error)), undefined, base.stepId);
+				this._skipUnfinishedAgentSteps(response, localize('localAISubagentSkippedAfterFailure', "Not run because the active subagent could not start."));
 				response.content = localize('localAISubagentStartError', "{0} subagent could not start: {1}", stage, error instanceof Error ? error.message : String(error));
 			}
 			this._storeHistory();
@@ -1249,6 +1214,15 @@ export class LocalAIViewPane extends ViewPane {
 		this._storeHistory();
 		this._renderMessages();
 		this._notificationService.warn(message);
+	}
+
+	private _skipUnfinishedAgentSteps(response: IChatMessage, detail: string): void {
+		for (const step of response.agentSteps ?? []) {
+			if (step.status === 'queued' || step.status === 'running') {
+				step.status = 'skipped';
+				step.detail = detail;
+			}
+		}
 	}
 
 	private _agentStageName(stage: AgentSubagentStage): string {
@@ -1302,6 +1276,7 @@ export class LocalAIViewPane extends ViewPane {
 				dependsOn,
 				needsTests: !/\bneeds_tests\s*=\s*["']false["']/i.test(attributes),
 				targets: [],
+				references: [],
 				reviewerResponses: [],
 			});
 		}
@@ -1313,6 +1288,7 @@ export class LocalAIViewPane extends ViewPane {
 				paths: selectedTargets.map(target => target.displayPath),
 				needsTests: true,
 				targets: [],
+				references: [],
 				reviewerResponses: [],
 			});
 		}
@@ -1332,6 +1308,15 @@ export class LocalAIViewPane extends ViewPane {
 				}
 				return matches;
 			});
+			const prompt = `${request.instruction}\n${task.instruction}`;
+			const targetUris = new Set(task.targets.map(target => target.resource.toString()));
+			task.references = selectedTargets
+				.filter(target => !targetUris.has(target.resource.toString()))
+				.map(target => ({ target, score: scoreLocalAIWorkspacePath(prompt, target.displayPath) }))
+				.filter(candidate => candidate.score >= 90)
+				.sort((left, right) => right.score - left.score || left.target.displayPath.length - right.target.displayPath.length)
+				.slice(0, 3)
+				.map(candidate => candidate.target);
 		}
 		const requestsDependencies = /\b(?:add|install|include|update|configure)\b[\s\S]{0,80}\bdependenc(?:y|ies)\b|\brequired\s+dependenc(?:y|ies)\b/i.test(request.instruction);
 		if (requestsDependencies && tasks.length < maximumTasks) {
@@ -1355,6 +1340,7 @@ export class LocalAIViewPane extends ViewPane {
 					paths: [manifest.displayPath],
 					needsTests: true,
 					targets: [manifest],
+					references: [],
 					reviewerResponses: [],
 				});
 			}
@@ -1390,7 +1376,7 @@ export class LocalAIViewPane extends ViewPane {
 
 	private async _startFeatureImplementer(request: IPendingAgentRequest, workflow: IAgentWorkflow): Promise<void> {
 		const task = workflow.tasks[workflow.currentTask];
-		const attachments = this._agentTargetAttachments(request, task.targets);
+		const attachments = this._agentTaskAttachments(request, task);
 		const context = request.context && task.targets.some(target => target.resource.toString() === request.context?.uri) ? request.context : undefined;
 		await this._startAgentSubagent({
 			...request,
@@ -1398,12 +1384,12 @@ export class LocalAIViewPane extends ViewPane {
 			targets: task.targets,
 			attachments,
 			workflow,
-		}, 'implementer', formatAgentFeatureImplementerMessages(context, request.instruction, this._promptTask(task), attachments, request.workspaceRoots));
+		}, 'implementer', formatAgentFeatureImplementerMessages(context, request.instruction, this._promptTask(task), attachments, request.workspaceRoots, this._contextWindowTokens()));
 	}
 
 	private async _startFeatureReviewer(request: IPendingAgentRequest, workflow: IAgentWorkflow, kind: 'analysis' | 'repairInitial' | 'repairAfterReview'): Promise<void> {
 		const task = workflow.tasks[workflow.currentTask];
-		const attachments = this._agentTargetAttachments(request, task.targets);
+		const attachments = this._agentTaskAttachments(request, task);
 		if (kind !== 'analysis') {
 			const stepId = `${task.id}:reviewer:repair`;
 			const response = this._messages.at(-1);
@@ -1425,6 +1411,7 @@ export class LocalAIViewPane extends ViewPane {
 				concerns,
 				attachments,
 				request.workspaceRoots,
+				this._contextWindowTokens(),
 			));
 			return;
 		}
@@ -1436,18 +1423,20 @@ export class LocalAIViewPane extends ViewPane {
 			task.candidateResponse ?? '',
 			attachments,
 			workflow.reviewerIndex === 0 ? [] : [localize('localAIPreviousReviewContext', "A separate safety reviewer already inspected this feature. Perform an independent {0} review.", reviewKind)],
+			this._contextWindowTokens(),
 		));
 	}
 
 	private async _startFeatureTester(request: IPendingAgentRequest, workflow: IAgentWorkflow): Promise<void> {
 		const task = workflow.tasks[workflow.currentTask];
-		const attachments = this._agentTargetAttachments(request, task.targets);
+		const attachments = this._agentTaskAttachments(request, task);
 		await this._startAgentSubagent({ ...request, stepId: `${task.id}:tester`, targets: task.targets, attachments, workflow }, 'tester', formatAgentTesterMessages(
 			request.instruction,
 			this._promptTask(task),
 			task.candidateResponse ?? '',
 			attachments,
 			this._availableTestCommands(request.workspaceRoots),
+			this._contextWindowTokens(),
 		));
 	}
 
@@ -1573,6 +1562,7 @@ export class LocalAIViewPane extends ViewPane {
 			this._combinedWorkflowResponse(workflow),
 			attachments,
 			this._availableTestCommands(request.workspaceRoots),
+			this._contextWindowTokens(),
 		));
 	}
 
@@ -1657,7 +1647,8 @@ export class LocalAIViewPane extends ViewPane {
 				content: target.originalText,
 			});
 		}
-		// Feature implementers and reviewers must receive only their assigned files.
+		// Feature subagents receive editable targets plus explicitly ranked read-only
+		// references; only request.targets are accepted by the edit parser.
 		// Falling back to the request attachments is reserved for legacy/single-stage
 		// calls that do not yet have resolved targets.
 		if (!targets.length) {
@@ -1666,6 +1657,11 @@ export class LocalAIViewPane extends ViewPane {
 			}
 		}
 		return [...combined.values()].slice(0, maximumAttachedFiles);
+	}
+
+	private _agentTaskAttachments(request: IPendingAgentRequest, task: IAgentFeatureTask): ILocalAIAttachment[] {
+		const contextTargets = [...new Map([...task.targets, ...task.references].map(target => [target.resource.toString(), target])).values()];
+		return this._agentTargetAttachments(request, contextTargets);
 	}
 
 	private async _handleRequestTimeout(): Promise<void> {
@@ -1687,7 +1683,7 @@ export class LocalAIViewPane extends ViewPane {
 		}
 
 		if (response?.role === 'assistant' && agentRequest?.stage === 'integrationTester' && agentRequest.workflow) {
-			this._setAgentStep(response, 'integrationTester', 'handedOff', localize('localAIIntegrationTesterTimedOut', "Integration review stopped after two minutes without model output. Feature-level validation completed, so the prepared changes are available for review."), undefined, agentRequest.stepId);
+			this._setAgentStep(response, 'integrationTester', 'handedOff', localize('localAIIntegrationTesterTimedOut', "Integration review stopped after the model produced no output before its context-aware timeout. Feature-level validation completed, so the prepared changes are available for review."), undefined, agentRequest.stepId);
 			response.content = localize('localAIIntegrationTesterTimedOutSummary', "Integration review timed out; prepared changes passed feature-level review and are ready for your review.");
 			this._setInputEnabled(true);
 			await this._stageAgentResponse(requestId, this._combinedWorkflowResponse(agentRequest.workflow), response);
@@ -1698,7 +1694,8 @@ export class LocalAIViewPane extends ViewPane {
 		this._setInputEnabled(true);
 		if (response?.role === 'assistant') {
 			if (agentRequest) {
-				this._setAgentStep(response, agentRequest.stage, 'failed', localize('localAISubagentTimedOutDetail', "Stopped after two minutes without model output."), undefined, agentRequest.stepId);
+				this._setAgentStep(response, agentRequest.stage, 'failed', localize('localAISubagentTimedOutDetail', "Stopped after the model produced no output before its context-aware timeout."), undefined, agentRequest.stepId);
+				this._skipUnfinishedAgentSteps(response, localize('localAISubagentSkippedAfterTimeout', "Not run because the active subagent timed out."));
 			}
 			response.content = localize('localAIRequestTimedOut', "The local model stopped responding. You can retry the request or choose a smaller model context.");
 		}
@@ -1719,6 +1716,7 @@ export class LocalAIViewPane extends ViewPane {
 		if (response?.role === 'assistant') {
 			if (agentRequest) {
 				this._setAgentStep(response, agentRequest.stage, 'failed', localize('localAISubagentFailedDetail', "Failed: {0}", message), undefined, agentRequest.stepId);
+				this._skipUnfinishedAgentSteps(response, localize('localAISubagentSkippedAfterFailure', "Not run because the active subagent failed."));
 			}
 			response.content = localize('localAIWorkflowError', "Agent workflow could not finish: {0}", message);
 		}
@@ -1733,11 +1731,24 @@ export class LocalAIViewPane extends ViewPane {
 		this._preparingRequest = false;
 		this._requestWatchdog.cancel();
 		const requestId = this._activeRequestId;
+		const agentRequest = this._pendingAgentRequest;
+		const response = this._messages.at(-1);
 		this._activeRequestId = undefined;
 		this._activeAgentResponse = '';
 		this._pendingAgentRequest = undefined;
 		if (requestId) {
-			await this._localLLMService.cancelRequest(requestId);
+			try {
+				await this._localLLMService.cancelRequest(requestId);
+			} catch {
+				// Cancellation is best effort. The local server may have already ended,
+				// but every visible workflow step must still leave its loading state.
+			}
+		}
+		if (response?.role === 'assistant' && agentRequest) {
+			const activeStep = response.agentSteps?.find(step => step.id === (agentRequest.stepId ?? agentRequest.stage));
+			this._setAgentStep(response, agentRequest.stage, 'skipped', localize('localAISubagentStoppedByUser', "Stopped by you."), activeStep?.files, agentRequest.stepId);
+			this._skipUnfinishedAgentSteps(response, localize('localAISubagentSkippedAfterStop', "Not run because the workflow was stopped."));
+			response.content = localize('localAIAgentStopped', "Agent workflow stopped.");
 		}
 		this._setInputEnabled(true);
 		this._storeHistory();
@@ -1814,6 +1825,7 @@ export class LocalAIViewPane extends ViewPane {
 			if (response?.role === 'assistant') {
 				if (agentRequest) {
 					this._setAgentStep(response, agentRequest.stage, 'failed', localize('localAISubagentFailedDetail', "Failed: {0}", error), undefined, agentRequest.stepId);
+					this._skipUnfinishedAgentSteps(response, localize('localAISubagentSkippedAfterFailure', "Not run because the active subagent failed."));
 				}
 				response.content = localize('localAIResponseError', "Local model error: {0}", error);
 			}
@@ -2122,6 +2134,7 @@ export class LocalAIViewPane extends ViewPane {
 					errors,
 					attachments,
 					request.workspaceRoots,
+					this._contextWindowTokens(),
 				));
 				return;
 			}
@@ -2243,6 +2256,10 @@ export class LocalAIViewPane extends ViewPane {
 			const badges = dom.append(identity, dom.$('.local-ai-model-badges'));
 			const sizeBadge = dom.append(badges, dom.$('span.local-ai-model-badge'));
 			sizeBadge.textContent = `${model.quantization} · ${this._formatBytes(model.sizeBytes)}`;
+			const contextBadge = dom.append(badges, dom.$('span.local-ai-model-badge'));
+			contextBadge.textContent = model.contextWindowTokens > model.nativeContextTokens
+				? localize('localAIModelExtendedContextWindow', "{0}K extended context · {1}K native", model.contextWindowTokens / 1024, model.nativeContextTokens / 1024)
+				: localize('localAIModelContextWindow', "{0}K context", model.contextWindowTokens / 1024);
 			const recommendationBadge = dom.append(badges, dom.$(`span.local-ai-model-badge.${model.recommendation}`));
 			recommendationBadge.textContent = model.recommendation === 'recommended'
 				? localize('localAIRecommendedModel', "Recommended")
@@ -2672,8 +2689,12 @@ export class LocalAIViewPane extends ViewPane {
 								id: typeof step.id === 'string' ? step.id : `${step.stage}-${index}`,
 								stage: step.stage,
 								name: typeof step.name === 'string' ? step.name : this._agentStageName(step.stage),
-								status: wasNeverRun ? 'skipped' : step.status === 'running' || step.status === 'queued' ? 'failed' : step.status,
-								detail: step.status === 'running' || step.status === 'queued' ? localize('localAISubagentInterrupted', "Interrupted when Orbyte closed.") : step.detail,
+								status: wasNeverRun || step.status === 'queued' ? 'skipped' : step.status === 'running' ? 'failed' : step.status,
+								detail: step.status === 'running'
+									? localize('localAISubagentInterrupted', "Interrupted when Orbyte closed.")
+									: step.status === 'queued'
+										? localize('localAISubagentNotRunBeforeClose', "Not run before Orbyte closed.")
+										: step.detail,
 								files: Array.isArray(step.files) ? step.files.filter(file => typeof file === 'string').slice(0, maximumAttachedFiles) : undefined,
 							};
 						})

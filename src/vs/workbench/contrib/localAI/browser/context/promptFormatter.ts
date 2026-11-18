@@ -4,14 +4,20 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { ILocalLLMChatMessage } from '../../../../../platform/localLLM/common/localLLM.js';
+import { getLocalLLMGenerationTokens, localLLMMinimumContextTokens } from '../../../../../platform/localLLM/common/localLLMContextProfile.js';
 import { ILocalAIContext } from './localAIContext.js';
 
-const modelContextTokens = 8192;
-const reservedGenerationTokens = 3072;
 const approximateCharactersPerToken = 3;
-const inputCharacterBudget = (modelContextTokens - reservedGenerationTokens) * approximateCharactersPerToken;
 const maximumRequestCharacters = 4000;
 const maximumAttachmentCharacters = 9000;
+
+function inputCharacterBudget(contextWindowTokens: number, generationTokens: number): number {
+	return Math.max(2_000, contextWindowTokens - generationTokens) * approximateCharactersPerToken;
+}
+
+function attachmentCharacterBudget(contextWindowTokens: number, generationTokens: number): number {
+	return Math.min(300_000, Math.max(maximumAttachmentCharacters, Math.floor(inputCharacterBudget(contextWindowTokens, generationTokens) * 0.58)));
+}
 
 export type LocalAIChatMode = 'ask' | 'plan' | 'agent';
 
@@ -78,8 +84,8 @@ function activeFileWindow(context: ILocalAIContext, maximumCharacters: number): 
 	return lines.slice(start, end).join('\n');
 }
 
-export function formatContextXml(context: ILocalAIContext, maximumCharacters = inputCharacterBudget): string {
-	const rootStart = `<local_code_context token_budget="${modelContextTokens}">\n`;
+export function formatContextXml(context: ILocalAIContext, maximumCharacters = inputCharacterBudget(localLLMMinimumContextTokens, 3072), contextWindowTokens = localLLMMinimumContextTokens): string {
+	const rootStart = `<local_code_context token_budget="${contextWindowTokens}">\n`;
 	const rootEnd = '\n</local_code_context>';
 	const sections: string[] = [];
 	let remaining = Math.max(0, maximumCharacters - rootStart.length - rootEnd.length);
@@ -156,13 +162,13 @@ export function formatContextXml(context: ILocalAIContext, maximumCharacters = i
 	return `${rootStart}${sections.join('')}${rootEnd}`;
 }
 
-function formatAttachmentsXml(attachments: readonly ILocalAIAttachment[]): string {
+function formatAttachmentsXml(attachments: readonly ILocalAIAttachment[], maximumCharacters = maximumAttachmentCharacters): string {
 	if (!attachments.length) {
 		return '';
 	}
 
 	const sections: string[] = [];
-	let remaining = maximumAttachmentCharacters;
+	let remaining = maximumCharacters;
 	for (const attachment of attachments) {
 		const start = `<attached_file uri="${escapeAttribute(attachment.uri)}" name="${escapeAttribute(attachment.name)}">\n`;
 		const end = '\n</attached_file>';
@@ -179,11 +185,10 @@ function formatAttachmentsXml(attachments: readonly ILocalAIAttachment[]): strin
 	return sections.length ? `<attached_files>\n${sections.join('\n')}\n</attached_files>` : '';
 }
 
-function formatWorkspaceRootsXml(roots: readonly ILocalAIWorkspaceRootContext[]): string {
+function formatWorkspaceRootsXml(roots: readonly ILocalAIWorkspaceRootContext[], maximumCharacters = 6000): string {
 	if (!roots.length) {
 		return '';
 	}
-	const maximumCharacters = 6000;
 	let remaining = maximumCharacters;
 	const sections: string[] = [];
 	for (const root of roots) {
@@ -217,7 +222,7 @@ export function formatAgentPlannerMessages(request: string, roots: readonly ILoc
 		: '<known_targets />';
 	return [{
 		role: 'system',
-		content: 'You are the Planner subagent for an offline coding agent. Select the smallest set of relevant existing files and decide whether genuinely new files are required. Do not write code. Return concise XML only: <agent_plan><targets><target path="exact workspace-relative path" action="edit|create" /></targets><steps><step>short action</step></steps></agent_plan>. Use only paths present in workspace_roots or known_targets. Never use untitled: URIs or a workspace directory itself as a file target.',
+		content: 'You are the Planner subagent for an offline coding agent. Select the smallest set of relevant existing files and decide whether genuinely new files are required. Do not write code. Return concise XML only: <agent_plan><targets><target path="exact workspace-relative path" action="edit|create" /></targets><steps><step>short action</step></steps></agent_plan>. For edit, use only paths present in workspace_roots or known_targets. For create, infer an exact new workspace-relative file path inside an existing conventional source directory shown by workspace_roots; the new path is expected to be absent from the file list. Never use untitled: URIs or a workspace directory itself as a file target.',
 	}, {
 		role: 'user',
 		content: `${rootsXml}\n${knownTargets}\n<user_request>${cdata(boundedRequest)}</user_request>`,
@@ -238,7 +243,7 @@ export function formatAgentTaskPlannerMessages(request: string, roots: readonly 
 		: '<known_targets />';
 	return [{
 		role: 'system',
-		content: `You are the Lead Planner subagent for an offline coding agent. Split a large request into at most ${boundedMaximumTasks} cohesive feature tasks that can be implemented with isolated context. Tasks may run in parallel only when they do not edit the same file and have no dependency. Do not write code. Return concise XML only:\n<agent_task_plan>\n<task id="feature-1" title="short title" needs_tests="true|false">\n<instruction>one independently actionable requirement</instruction>\n<paths><path>exact workspace-relative file path</path></paths>\n<depends_on><task_id>feature-0</task_id></depends_on>\n</task>\n</agent_task_plan>\nUse stable unique task ids. Put every file in the smallest relevant task. A path may belong to only one parallel task; if two features must edit the same file, combine them or add a dependency. Use only paths present in workspace_roots or known_targets. Never target untitled: URIs or a workspace directory. Set needs_tests="true" for behavior changes.`,
+		content: `You are the Lead Planner subagent for an offline coding agent. Split a large request into at most ${boundedMaximumTasks} cohesive feature tasks that can be implemented with isolated context. Tasks may run in parallel only when they do not edit the same file and have no dependency. Do not write code. Return concise XML only:\n<agent_task_plan>\n<task id="feature-1" title="short title" needs_tests="true|false">\n<instruction>one independently actionable requirement; explicitly say create when its path is new</instruction>\n<paths><path>exact workspace-relative file path</path></paths>\n<depends_on><task_id>feature-0</task_id></depends_on>\n</task>\n</agent_task_plan>\nUse stable unique task ids. Put every file in the smallest relevant task. A path may belong to only one parallel task; if two features must edit the same file, combine them or add a dependency. Existing edit paths must be present in workspace_roots or known_targets. For a requested new class or source file, infer its exact new path inside an existing conventional source directory shown in workspace_roots; it is expected to be absent from the file list. Never target untitled: URIs or a workspace directory. Set needs_tests="true" for behavior changes.`,
 	}, {
 		role: 'user',
 		content: `${rootsXml}\n${knownTargets}\n<user_request>${cdata(boundedRequest)}</user_request>`,
@@ -253,8 +258,8 @@ function formatFeatureTaskXml(task: ILocalAIAgentFeatureTask): string {
 }
 
 /** Gives one implementer only the files and requirement for its feature task. */
-export function formatAgentFeatureImplementerMessages(context: ILocalAIContext | undefined, request: string, task: ILocalAIAgentFeatureTask, attachments: readonly ILocalAIAttachment[], workspaceRoots: readonly ILocalAIWorkspaceRootContext[]): readonly ILocalLLMChatMessage[] {
-	const base = formatChatMessages(context, task.instruction, [], 'agent', attachments, workspaceRoots);
+export function formatAgentFeatureImplementerMessages(context: ILocalAIContext | undefined, request: string, task: ILocalAIAgentFeatureTask, attachments: readonly ILocalAIAttachment[], workspaceRoots: readonly ILocalAIWorkspaceRootContext[], contextWindowTokens = localLLMMinimumContextTokens): readonly ILocalLLMChatMessage[] {
+	const base = formatChatMessages(context, task.instruction, [], 'agent', attachments, workspaceRoots, contextWindowTokens);
 	return [{
 		role: 'system',
 		content: `${base[0].content}\nYou are Feature Implementer ${task.id}. Work only on the supplied feature_task. You receive isolated context deliberately. Do not implement another feature, edit an attachment not listed in feature_task paths, or assume a dependency is complete unless it appears in the supplied file contents. Keep the standard local_ai_agent_response edit protocol.`,
@@ -265,8 +270,9 @@ export function formatAgentFeatureImplementerMessages(context: ILocalAIContext |
 }
 
 /** Asks a focused reviewer for a verdict without giving it unrelated features. */
-export function formatAgentFeatureReviewerMessages(request: string, task: ILocalAIAgentFeatureTask, candidateResponse: string, attachments: readonly ILocalAIAttachment[], concerns: readonly string[] = []): readonly ILocalLLMChatMessage[] {
-	const attachmentsXml = formatAttachmentsXml(attachments);
+export function formatAgentFeatureReviewerMessages(request: string, task: ILocalAIAgentFeatureTask, candidateResponse: string, attachments: readonly ILocalAIAttachment[], concerns: readonly string[] = [], contextWindowTokens = localLLMMinimumContextTokens): readonly ILocalLLMChatMessage[] {
+	const generationTokens = getLocalLLMGenerationTokens(contextWindowTokens, 'analysis');
+	const attachmentsXml = formatAttachmentsXml(attachments, attachmentCharacterBudget(contextWindowTokens, generationTokens));
 	const concernsXml = concerns.length
 		? `<known_concerns>${concerns.slice(0, 8).map(concern => `<concern>${cdata(concern.slice(0, 800))}</concern>`).join('')}</known_concerns>`
 		: '<known_concerns />';
@@ -280,8 +286,9 @@ export function formatAgentFeatureReviewerMessages(request: string, task: ILocal
 }
 
 /** Performs bounded static test analysis and recommends executable commands. */
-export function formatAgentTesterMessages(request: string, task: ILocalAIAgentFeatureTask, candidateResponse: string, attachments: readonly ILocalAIAttachment[], availableCommands: readonly string[] = []): readonly ILocalLLMChatMessage[] {
-	const attachmentsXml = formatAttachmentsXml(attachments);
+export function formatAgentTesterMessages(request: string, task: ILocalAIAgentFeatureTask, candidateResponse: string, attachments: readonly ILocalAIAttachment[], availableCommands: readonly string[] = [], contextWindowTokens = localLLMMinimumContextTokens): readonly ILocalLLMChatMessage[] {
+	const generationTokens = getLocalLLMGenerationTokens(contextWindowTokens, 'analysis');
+	const attachmentsXml = formatAttachmentsXml(attachments, attachmentCharacterBudget(contextWindowTokens, generationTokens));
 	const commandsXml = availableCommands.length
 		? `<available_commands>${availableCommands.slice(0, 12).map(command => `<command>${cdata(command.slice(0, 500))}</command>`).join('')}</available_commands>`
 		: '<available_commands />';
@@ -294,8 +301,8 @@ export function formatAgentTesterMessages(request: string, task: ILocalAIAgentFe
 	}];
 }
 
-export function formatAgentRepairMessages(context: ILocalAIContext | undefined, request: string, invalidResponse: string, errors: readonly string[], attachments: readonly ILocalAIAttachment[], workspaceRoots: readonly ILocalAIWorkspaceRootContext[]): readonly ILocalLLMChatMessage[] {
-	const base = formatChatMessages(context, request, [], 'agent', attachments, workspaceRoots);
+export function formatAgentRepairMessages(context: ILocalAIContext | undefined, request: string, invalidResponse: string, errors: readonly string[], attachments: readonly ILocalAIAttachment[], workspaceRoots: readonly ILocalAIWorkspaceRootContext[], contextWindowTokens = localLLMMinimumContextTokens): readonly ILocalLLMChatMessage[] {
+	const base = formatChatMessages(context, request, [], 'agent', attachments, workspaceRoots, contextWindowTokens);
 	const feedback = errors.length ? errors.slice(0, 6).join('\n') : 'The response contained no usable edit or create operation.';
 	const malformedJavaRepair = errors.some(error => error.includes('Existing Java target is structurally invalid'));
 	if (malformedJavaRepair) {
@@ -310,9 +317,13 @@ export function formatAgentRepairMessages(context: ILocalAIContext | undefined, 
 			content: `${base.at(-1)!.content}\n<required_file_uri>${cdata(repairUri)}</required_file_uri>\n<reviewer_feedback>${cdata(feedback)}</reviewer_feedback>\nRepair the attached Java file completely. Copy required_file_uri exactly into the single file operation. Do not repeat or imitate the invalid partial edits.`,
 		}];
 	}
+	const repairsNewFile = isNewSourceCreationRequest(request) || errors.some(error => error.startsWith('Unknown insert target:'));
+	const repairRule = repairsNewFile
+		? 'For a genuinely new file, convert the invalid insert into one create operation containing the complete file and preserve its exact URI under a supplied workspace_root. Use edit only for exact existing target URIs.'
+		: 'Use only exact existing target URIs.';
 	const reviewerSystem: ILocalLLMChatMessage = {
 		role: 'system',
-		content: `${base[0].content}\nYou are the Reviewer subagent. Correct the invalid implementer operations using only exact existing target URIs. Return one corrected <local_ai_agent_response> and no explanation.`,
+		content: `${base[0].content}\nYou are the Reviewer subagent. Correct the invalid implementer operations. ${repairRule} Return one corrected <local_ai_agent_response> and no explanation.`,
 	};
 	return [
 		reviewerSystem,
@@ -320,7 +331,7 @@ export function formatAgentRepairMessages(context: ILocalAIContext | undefined, 
 		{ role: 'assistant', content: invalidResponse.slice(0, 12_000) },
 		{
 			role: 'user',
-			content: `<reviewer_feedback>${cdata(feedback)}</reviewer_feedback>\nYou are the Reviewer subagent. Repair the implementer response using the exact allowed URIs and current file contents above. Return one corrected <local_ai_agent_response> only. Do not explain the error, use untitled: URIs, target a directory, or use Python before_main insertion for Java.`,
+			content: `<reviewer_feedback>${cdata(feedback)}</reviewer_feedback>\nYou are the Reviewer subagent. Repair the implementer response using the exact allowed existing URIs and workspace roots above. ${repairRule} Return one corrected <local_ai_agent_response> only. Do not explain the error, use untitled: URIs, target a directory, or use Python before_main insertion for Java.`,
 		},
 	];
 }
@@ -336,9 +347,11 @@ function modeSystemPrompt(mode: LocalAIChatMode): string {
 	}
 }
 
-export function formatChatMessages(context: ILocalAIContext | undefined, request: string, history: readonly ILocalLLMChatMessage[] = [], mode: LocalAIChatMode = 'ask', attachments: readonly ILocalAIAttachment[] = [], workspaceRoots: readonly ILocalAIWorkspaceRootContext[] = []): readonly ILocalLLMChatMessage[] {
+export function formatChatMessages(context: ILocalAIContext | undefined, request: string, history: readonly ILocalLLMChatMessage[] = [], mode: LocalAIChatMode = 'ask', attachments: readonly ILocalAIAttachment[] = [], workspaceRoots: readonly ILocalAIWorkspaceRootContext[] = [], contextWindowTokens = localLLMMinimumContextTokens): readonly ILocalLLMChatMessage[] {
 	const boundedRequest = request.slice(0, maximumRequestCharacters);
-	const maximumHistoryCharacters = 6000;
+	const generationTokens = getLocalLLMGenerationTokens(contextWindowTokens, mode === 'agent' ? 'implementer' : mode === 'plan' ? 'planner' : 'chat');
+	const totalInputCharacterBudget = inputCharacterBudget(contextWindowTokens, generationTokens);
+	const maximumHistoryCharacters = Math.min(16_000, Math.max(6000, Math.floor(totalInputCharacterBudget * 0.14)));
 	const boundedHistory: ILocalLLMChatMessage[] = [];
 	let historyCharacters = 0;
 	for (let index = history.length - 1; index >= 0; index--) {
@@ -350,10 +363,10 @@ export function formatChatMessages(context: ILocalAIContext | undefined, request
 		boundedHistory.unshift({ role: message.role, content: message.content.slice(-remaining) });
 		historyCharacters += Math.min(message.content.length, remaining);
 	}
-	const attachmentsXml = formatAttachmentsXml(context ? attachments.filter(attachment => attachment.uri !== context.uri) : attachments);
-	const workspaceRootsXml = mode === 'agent' ? formatWorkspaceRootsXml(workspaceRoots) : '';
-	const contextBudget = Math.max(2000, inputCharacterBudget - maximumRequestCharacters - historyCharacters - attachmentsXml.length - workspaceRootsXml.length - 1000);
-	const contextXml = context ? formatContextXml(context, contextBudget) : '<local_code_context />';
+	const attachmentsXml = formatAttachmentsXml(context ? attachments.filter(attachment => attachment.uri !== context.uri) : attachments, attachmentCharacterBudget(contextWindowTokens, generationTokens));
+	const workspaceRootsXml = mode === 'agent' ? formatWorkspaceRootsXml(workspaceRoots, contextWindowTokens >= 16_384 ? 12_000 : 6000) : '';
+	const contextBudget = Math.max(2000, totalInputCharacterBudget - maximumRequestCharacters - historyCharacters - attachmentsXml.length - workspaceRootsXml.length - 1000);
+	const contextXml = context ? formatContextXml(context, contextBudget, contextWindowTokens) : '<local_code_context />';
 	return [
 		{
 			role: 'system',
@@ -377,7 +390,7 @@ export function formatInlineEditMessages(context: ILocalAIContext, instruction: 
 		},
 		{
 			role: 'user',
-			content: `${formatContextXml(context, inputCharacterBudget - target.length - boundedInstruction.length - 1500)}\n<edit_instruction>${cdata(boundedInstruction)}</edit_instruction>\n<edit_target>${cdata(target)}</edit_target>`,
+			content: `${formatContextXml(context, inputCharacterBudget(localLLMMinimumContextTokens, 3072) - target.length - boundedInstruction.length - 1500)}\n<edit_instruction>${cdata(boundedInstruction)}</edit_instruction>\n<edit_target>${cdata(target)}</edit_target>`,
 		},
 	];
 }
@@ -388,7 +401,7 @@ export function formatChatML(messages: readonly ILocalLLMChatMessage[]): string 
 
 export function formatFimPrompt(prefix: string, suffix: string, contextXml?: string): string {
 	const boundedContext = contextXml?.slice(0, 4000);
-	const codeBudget = inputCharacterBudget - (boundedContext?.length ?? 0) - 100;
+	const codeBudget = inputCharacterBudget(localLLMMinimumContextTokens, 3072) - (boundedContext?.length ?? 0) - 100;
 	const prefixBudget = Math.floor(codeBudget * 0.7);
 	const boundedPrefix = prefix.slice(-prefixBudget);
 	const boundedSuffix = suffix.slice(0, codeBudget - boundedPrefix.length);

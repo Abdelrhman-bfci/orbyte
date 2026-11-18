@@ -640,6 +640,7 @@
 .local-ai-subagent {
 	display: flex;
 	position: relative;
+	align-items: flex-start;
 	gap: 8px;
 	min-width: 0;
 	padding: 7px 9px;
@@ -690,9 +691,15 @@
 }
 
 .local-ai-subagent-icon {
+	display: inline-flex;
+	align-items: center;
+	align-self: flex-start;
+	justify-content: center;
 	flex: none;
 	width: 16px;
-	margin-top: 2px;
+	height: 20px;
+	margin-top: 0;
+	line-height: 20px;
 	text-align: center;
 	color: var(--vscode-descriptionForeground);
 }

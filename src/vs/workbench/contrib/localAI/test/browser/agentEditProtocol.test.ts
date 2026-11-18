@@ -4,13 +4,105 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { getLocalLLMContextWindowTokens, getLocalLLMGenerationTokens } from '../../../../../platform/localLLM/common/localLLMContextProfile.js';
 import { parseLocalAIAgentResponse, validateLocalAIAgentProposal } from '../../browser/context/agentEditProtocol.js';
 import { formatAgentFeatureImplementerMessages, formatAgentFeatureReviewerMessages, formatAgentPlannerMessages, formatAgentRepairMessages, formatAgentTaskPlannerMessages, formatAgentTesterMessages, formatChatMessages, ILocalAIAgentFeatureTask, isNewSourceCreationRequest } from '../../browser/context/promptFormatter.js';
+import { scoreLocalAIWorkspacePath } from '../../browser/context/smartWorkspaceContext.js';
 
 suite('Local AI Agent edit protocol', () => {
+	test('detects a named service without an explicit file mention', () => {
+		const prompt = 'Add a saveById method in employee service';
+		const sourceScore = scoreLocalAIWorkspacePath(prompt, 'src/main/java/com/example/demo/EmployeeService.java');
+		const entityScore = scoreLocalAIWorkspacePath(prompt, 'src/main/java/com/example/demo/Employee.java');
+		const testScore = scoreLocalAIWorkspacePath(prompt, 'src/test/java/com/example/demo/EmployeeServiceTest.java');
+
+		assert.ok(sourceScore >= 360);
+		assert.ok(sourceScore > entityScore);
+		assert.ok(entityScore < 90);
+		assert.ok(sourceScore > testScore);
+	});
+
+	test('prefers the service test when the prompt explicitly requests tests', () => {
+		const prompt = 'Update EmployeeServiceTest for the new behavior';
+		const sourceScore = scoreLocalAIWorkspacePath(prompt, 'src/main/java/com/example/demo/EmployeeService.java');
+		const testScore = scoreLocalAIWorkspacePath(prompt, 'src/test/java/com/example/demo/EmployeeServiceTest.java');
+
+		assert.ok(testScore > sourceScore);
+	});
+
+	test('selects an existing service as read-only context for a like-named creation request', () => {
+		const prompt = 'Create StudentService like EmployeeService';
+		const serviceScore = scoreLocalAIWorkspacePath(prompt, 'src/main/java/com/example/demo/EmployeeService.java');
+		const controllerScore = scoreLocalAIWorkspacePath(prompt, 'src/main/java/com/example/demo/EmployeeController.java');
+
+		assert.ok(serviceScore >= 90);
+		assert.ok(controllerScore < 90);
+		assert.ok(serviceScore > controllerScore);
+	});
+
+	test('selects a hardware-aware long context and bounded generation budget', () => {
+		assert.strictEqual(getLocalLLMContextWindowTokens(32_768, 8 * 1024 ** 3, 6 * 1024 ** 3, 8 * 1024 ** 3), 32_768);
+		assert.strictEqual(getLocalLLMContextWindowTokens(65_536, 16 * 1024 ** 3, 8 * 1024 ** 3, 16 * 1024 ** 3), 65_536);
+		assert.strictEqual(getLocalLLMContextWindowTokens(131_072, 16 * 1024 ** 3, 16 * 1024 ** 3, 24 * 1024 ** 3), 8_192);
+		assert.strictEqual(getLocalLLMContextWindowTokens(131_072, 20 * 1024 ** 3, 16 * 1024 ** 3, 24 * 1024 ** 3), 69_632);
+		assert.strictEqual(getLocalLLMContextWindowTokens(131_072, 32 * 1024 ** 3, 16 * 1024 ** 3, 32 * 1024 ** 3), 131_072);
+		assert.strictEqual(getLocalLLMGenerationTokens(65_536, 'implementer'), 8_192);
+		assert.strictEqual(getLocalLLMGenerationTokens(8_192, 'planner'), 768);
+	});
+
+	test('retains multiple large target files when the selected model has a 32K context', () => {
+		const firstMarker = 'FIRST_FILE_REQUIRED_BEHAVIOR';
+		const secondMarker = 'SECOND_FILE_REQUIRED_CONTRACT';
+		const messages = formatChatMessages(undefined, 'Update both services without changing their contracts.', [], 'agent', [{
+			uri: 'file:///workspace/FirstService.java',
+			name: 'FirstService.java',
+			content: `${'class FirstService { /* padding */ }\n'.repeat(420)}${firstMarker}`,
+		}, {
+			uri: 'file:///workspace/SecondService.java',
+			name: 'SecondService.java',
+			content: `${'class SecondService { /* padding */ }\n'.repeat(420)}${secondMarker}`,
+		}], [{ uri: 'file:///workspace', name: 'workspace', files: ['FirstService.java', 'SecondService.java'] }], 32_768);
+
+		assert.ok(messages.at(-1)?.content.includes(firstMarker));
+		assert.ok(messages.at(-1)?.content.includes(secondMarker));
+		assert.ok(messages.at(-1)?.content.includes('Update both services'));
+	});
+
 	test('recognizes CamelCase Java service creation requests', () => {
 		assert.strictEqual(isNewSourceCreationRequest('Add a new EmployeeService with add, update, and delete methods'), true);
 		assert.strictEqual(isNewSourceCreationRequest('Update EmployeeService delete behavior'), false);
+	});
+
+	test('recovers a complete new Java service when a small model emits insert instead of create', () => {
+		const uri = 'file:///workspace/src/main/java/com/example/demo/StudentService.java';
+		const result = parseLocalAIAgentResponse(`<local_ai_agent_response><changes>
+<insert uri="${uri}" position="before_main"><![CDATA[package com.example.demo;
+
+import org.springframework.stereotype.Service;
+
+@Service
+public class StudentService {
+	public String findById(long id) {
+		return "student-" + id;
+	}
+}
+]]></insert>
+</changes></local_ai_agent_response>`, [], 'Create StudentService like EmployeeService');
+
+		assert.deepStrictEqual(result.errors, []);
+		assert.strictEqual(result.files.length, 0);
+		assert.strictEqual(result.creates.length, 1);
+		assert.strictEqual(result.creates[0].uri, uri);
+		assert.ok(result.creates[0].content.includes('public class StudentService'));
+	});
+
+	test('rejects an unknown Java insert when it is not a complete matching source file', () => {
+		const result = parseLocalAIAgentResponse(`<insert uri="file:///workspace/src/main/java/com/example/demo/StudentService.java" position="before_main"><![CDATA[
+public void save(Student student) { }
+]]></insert>`, [], 'Create StudentService like EmployeeService');
+
+		assert.strictEqual(result.creates.length, 0);
+		assert.ok(result.errors.some(error => error.startsWith('Unknown insert target:')));
 	});
 
 	test('planner subagent receives bounded workspace paths without editable directory targets', () => {
@@ -22,6 +114,7 @@ suite('Local AI Agent edit protocol', () => {
 
 		assert.ok(messages[0].content.includes('Planner subagent'));
 		assert.ok(messages[0].content.includes('Never use untitled: URIs'));
+		assert.ok(messages[0].content.includes('new workspace-relative file path'));
 		assert.ok(messages[1].content.includes('src/main/java/com/example/EmployeeService.java'));
 	});
 
@@ -82,6 +175,16 @@ suite('Local AI Agent edit protocol', () => {
 		assert.ok(messages.at(-1)?.content.includes('Reviewer subagent'));
 		assert.ok(messages.at(-1)?.content.includes('before_main insertion is only supported for Python'));
 		assert.ok(messages.at(-1)?.content.includes('Do not explain the error'));
+	});
+
+	test('reviewer converts an invalid new Java insert into a create operation', () => {
+		const messages = formatAgentRepairMessages(undefined, 'Create StudentService like EmployeeService', '<insert uri="file:///workspace/src/main/java/com/example/StudentService.java" position="before_main">bad</insert>', [
+			'Unknown insert target: file:///workspace/src/main/java/com/example/StudentService.java',
+		], [], [{ uri: 'file:///workspace', name: 'workspace', files: ['src/main/java/com/example/EmployeeService.java'] }]);
+
+		assert.ok(messages[0].content.includes('convert the invalid insert into one create operation'));
+		assert.ok(messages.at(-1)?.content.includes('complete file'));
+		assert.ok(messages.at(-1)?.content.includes('workspace roots'));
 	});
 
 	test('reviewer uses a complete-file contract for an already malformed Java target', () => {

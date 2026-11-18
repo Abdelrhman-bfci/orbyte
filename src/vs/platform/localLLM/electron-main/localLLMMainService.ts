@@ -22,6 +22,7 @@ import { IEnvironmentMainService } from '../../environment/electron-main/environ
 import { ILifecycleMainService } from '../../lifecycle/electron-main/lifecycleMainService.js';
 import { ILogService } from '../../log/common/log.js';
 import { ILocalLLMChatRequest, ILocalLLMFimRequest, ILocalLLMModelCatalog, ILocalLLMModelDownloadEvent, ILocalLLMModelInfo, ILocalLLMServerInfo, ILocalLLMService, ILocalLLMStreamEndEvent, ILocalLLMStreamTokenEvent } from '../common/localLLM.js';
+import { getLocalLLMContextWindowTokens } from '../common/localLLMContextProfile.js';
 
 const readinessTimeout = 120_000;
 const gracefulShutdownTimeout = 2_000;
@@ -36,6 +37,10 @@ interface IServerPaths {
 	readonly model: string;
 	readonly modelId: string;
 	readonly modelName: string;
+	readonly nativeContextTokens: number;
+	readonly maximumContextTokens: number;
+	readonly minimumMemoryBytes: number;
+	readonly recommendedMemoryBytes: number;
 }
 
 interface IModelDefinition {
@@ -48,6 +53,8 @@ interface IModelDefinition {
 	readonly sha256: string;
 	readonly minimumMemoryBytes: number;
 	readonly recommendedMemoryBytes: number;
+	readonly nativeContextTokens: number;
+	readonly maximumContextTokens: number;
 }
 
 interface IModelState {
@@ -67,6 +74,8 @@ const modelDefinitions: readonly IModelDefinition[] = [
 		sha256: 'cc324af070c2ecbfd324a30884d2f951a7ff756aba85cb811a6ec436933bb046',
 		minimumMemoryBytes: 4 * gibibyte,
 		recommendedMemoryBytes: 6 * gibibyte,
+		nativeContextTokens: 32_768,
+		maximumContextTokens: 32_768,
 	},
 	{
 		id: 'qwen2.5-coder-3b-q4-k-m',
@@ -78,6 +87,8 @@ const modelDefinitions: readonly IModelDefinition[] = [
 		sha256: '724fb256bec1ff062b2f65e4569e871ad2e95ab2a3989723d1769c54294730b7',
 		minimumMemoryBytes: 6 * gibibyte,
 		recommendedMemoryBytes: 8 * gibibyte,
+		nativeContextTokens: 32_768,
+		maximumContextTokens: 32_768,
 	},
 	{
 		id: 'qwen2.5-coder-7b-q4-k-m',
@@ -89,6 +100,8 @@ const modelDefinitions: readonly IModelDefinition[] = [
 		sha256: '509287f78cb4d4cf6b3843734733b914b2c158e43e22a7f4bf5e963800894d3c',
 		minimumMemoryBytes: 8 * gibibyte,
 		recommendedMemoryBytes: 16 * gibibyte,
+		nativeContextTokens: 32_768,
+		maximumContextTokens: 65_536,
 	},
 	{
 		id: 'qwen2.5-coder-14b-q4-k-m',
@@ -100,6 +113,8 @@ const modelDefinitions: readonly IModelDefinition[] = [
 		sha256: 'c1e659736d89ac1065fb495330fb824d94001974a4bfa78e7270e43476a8d940',
 		minimumMemoryBytes: 16 * gibibyte,
 		recommendedMemoryBytes: 24 * gibibyte,
+		nativeContextTokens: 32_768,
+		maximumContextTokens: 131_072,
 	},
 	{
 		id: 'qwen2.5-coder-32b-q4-k-m',
@@ -111,6 +126,8 @@ const modelDefinitions: readonly IModelDefinition[] = [
 		sha256: '4d64b316b5e6319d9613e0d97935d9ebd631fc7e334da400d00085eca749d085',
 		minimumMemoryBytes: 32 * gibibyte,
 		recommendedMemoryBytes: 48 * gibibyte,
+		nativeContextTokens: 32_768,
+		maximumContextTokens: 131_072,
 	},
 ];
 
@@ -215,6 +232,9 @@ export class LocalLLMMainService extends Disposable implements ILocalLLMService 
 				sizeBytes: definition.sizeBytes,
 				minimumMemoryBytes: definition.minimumMemoryBytes,
 				recommendedMemoryBytes: definition.recommendedMemoryBytes,
+				nativeContextTokens: definition.nativeContextTokens,
+				maximumContextTokens: definition.maximumContextTokens,
+				contextWindowTokens: getLocalLLMContextWindowTokens(definition.maximumContextTokens, memoryBytes, definition.minimumMemoryBytes, definition.recommendedMemoryBytes),
 				recommendation: definition.id === recommendedDefinition?.id ? 'recommended' : 'compatible',
 				installed: Boolean(install),
 				bundled: install?.bundled ?? false,
@@ -384,17 +404,27 @@ export class LocalLLMMainService extends Disposable implements ILocalLLMService 
 		try {
 			const paths = await this._resolveServerPaths();
 			const port = await this._findFreePort();
+			const contextWindowTokens = getLocalLLMContextWindowTokens(paths.maximumContextTokens, totalmem(), paths.minimumMemoryBytes, paths.recommendedMemoryBytes);
 			const args = [
 				'--model', paths.model,
 				'--host', '127.0.0.1',
 				'--port', String(port),
-				'--ctx-size', '8192',
+				'--ctx-size', String(contextWindowTokens),
 				'--n-gpu-layers', '999',
 				'--parallel', '1',
 				'--flash-attn', 'on',
+				'--cache-type-k', contextWindowTokens > paths.nativeContextTokens ? 'q4_0' : 'q8_0',
+				'--cache-type-v', contextWindowTokens > paths.nativeContextTokens ? 'q4_0' : 'q8_0',
 				'--jinja',
 				'--no-webui',
 			];
+			if (contextWindowTokens > paths.nativeContextTokens) {
+				args.push(
+					'--rope-scaling', 'yarn',
+					'--rope-scale', String(contextWindowTokens / paths.nativeContextTokens),
+					'--yarn-orig-ctx', String(paths.nativeContextTokens),
+				);
+			}
 
 			this._logService.info(`[localLLM] Starting llama-server on 127.0.0.1:${port}.`);
 			const child = spawn(paths.binary, args, {
@@ -420,7 +450,7 @@ export class LocalLLMMainService extends Disposable implements ILocalLLMService 
 			});
 
 			await this._waitUntilReady(port, child);
-			const info: ILocalLLMServerInfo = { state: 'ready', port, modelPath: paths.model, modelId: paths.modelId, modelName: paths.modelName };
+			const info: ILocalLLMServerInfo = { state: 'ready', port, modelPath: paths.model, modelId: paths.modelId, modelName: paths.modelName, contextWindowTokens };
 			this._setState(info);
 			return info;
 		} catch (error) {
@@ -477,6 +507,7 @@ export class LocalLLMMainService extends Disposable implements ILocalLLMService 
 			max_tokens: chatRequest.maxTokens ?? 2048,
 			temperature: chatRequest.temperature ?? 0.2,
 			top_p: chatRequest.topP ?? 0.95,
+			cache_prompt: true,
 		}, value => {
 			const response = value as { choices?: { delta?: { content?: string } }[] };
 			return response.choices?.[0]?.delta?.content;
@@ -628,7 +659,16 @@ export class LocalLLMMainService extends Disposable implements ILocalLLMService 
 		if (!model) {
 			throw new Error(`${definition.name} is not installed.`);
 		}
-		return { binary, model, modelId: definition.id, modelName: definition.name };
+		return {
+			binary,
+			model,
+			modelId: definition.id,
+			modelName: definition.name,
+			nativeContextTokens: definition.nativeContextTokens,
+			maximumContextTokens: definition.maximumContextTokens,
+			minimumMemoryBytes: definition.minimumMemoryBytes,
+			recommendedMemoryBytes: definition.recommendedMemoryBytes,
+		};
 	}
 
 	private async _resolveBinaryPath(): Promise<string> {

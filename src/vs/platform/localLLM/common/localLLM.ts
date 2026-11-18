@@ -20,6 +20,7 @@ export interface ILocalLLMServerInfo {
 	readonly modelPath?: string;
 	readonly modelId?: string;
 	readonly modelName?: string;
+	readonly contextWindowTokens?: number;
 	readonly error?: string;
 }
 
@@ -39,6 +40,9 @@ export interface ILocalLLMModelInfo {
 	readonly sizeBytes: number;
 	readonly minimumMemoryBytes: number;
 	readonly recommendedMemoryBytes: number;
+	readonly nativeContextTokens: number;
+	readonly maximumContextTokens: number;
+	readonly contextWindowTokens: number;
 	readonly recommendation: LocalLLMModelRecommendation;
 	readonly installed: boolean;
 	readonly bundled: boolean;
