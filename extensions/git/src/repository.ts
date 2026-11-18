@@ -1017,10 +1017,10 @@ export class Repository implements Disposable {
 		this.updateInputBoxPlaceholder();
 		this.disposables.push(this.onDidRunGitStatus(() => this.updateInputBoxPlaceholder()));
 
-		this._mergeGroup = this._sourceControl.createResourceGroup('merge', l10n.t('Merge Changes'));
-		this._indexGroup = this._sourceControl.createResourceGroup('index', l10n.t('Staged Changes'), { multiDiffEditorEnableViewChanges: true });
-		this._workingTreeGroup = this._sourceControl.createResourceGroup('workingTree', l10n.t('Changes'), { multiDiffEditorEnableViewChanges: true });
-		this._untrackedGroup = this._sourceControl.createResourceGroup('untracked', l10n.t('Untracked Changes'), { multiDiffEditorEnableViewChanges: true });
+		this._mergeGroup = this._sourceControl.createResourceGroup('merge', l10n.t('Merge Conflicts'));
+		this._indexGroup = this._sourceControl.createResourceGroup('index', l10n.t('Staged for Commit'), { multiDiffEditorEnableViewChanges: true });
+		this._workingTreeGroup = this._sourceControl.createResourceGroup('workingTree', l10n.t('Local Changes'), { multiDiffEditorEnableViewChanges: true });
+		this._untrackedGroup = this._sourceControl.createResourceGroup('untracked', l10n.t('Unversioned Files'), { multiDiffEditorEnableViewChanges: true });
 
 		const updateIndexGroupVisibility = () => {
 			const config = workspace.getConfiguration('git', root);
@@ -3443,9 +3443,9 @@ export class Repository implements Disposable {
 
 		if (branchName) {
 			// '{0}' will be replaced by the corresponding key-command later in the process, which is why it needs to stay.
-			this._sourceControl.inputBox.placeholder = l10n.t('Message ({0} to commit on "{1}")', '{0}', branchName);
+			this._sourceControl.inputBox.placeholder = l10n.t('Commit message for "{1}"  •  {0} to commit', '{0}', branchName);
 		} else {
-			this._sourceControl.inputBox.placeholder = l10n.t('Message ({0} to commit)');
+			this._sourceControl.inputBox.placeholder = l10n.t('Commit message  •  {0} to commit');
 		}
 	}
 

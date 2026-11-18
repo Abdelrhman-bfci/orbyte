@@ -52,9 +52,9 @@ export class ActivitybarPart extends Part {
 	static readonly COMPACT_ACTIVITYBAR_WIDTH = 36;
 
 	/** Narrower dimensions used when the floating panels (Modern UI) experiment is enabled. */
-	static readonly FLOATING_ACTION_HEIGHT = 36;
-	static readonly FLOATING_ACTIVITYBAR_WIDTH = 36;
-	static readonly FLOATING_COMPACT_ACTIVITYBAR_WIDTH = 28;
+	static readonly FLOATING_ACTION_HEIGHT = 44;
+	static readonly FLOATING_ACTIVITYBAR_WIDTH = 46;
+	static readonly FLOATING_COMPACT_ACTIVITYBAR_WIDTH = 36;
 
 	/**
 	 * Vertical gap between activity bar items at the default size under the floating
@@ -68,8 +68,8 @@ export class ActivitybarPart extends Part {
 	 */
 	static readonly FLOATING_COMPACT_ACTION_GAP = 4;
 
-	static readonly ICON_SIZE = 24;
-	static readonly COMPACT_ICON_SIZE = 16;
+	static readonly ICON_SIZE = 28;
+	static readonly COMPACT_ICON_SIZE = 22;
 
 	/**
 	 * Base gutter reserved around the activity bar under the floating panels

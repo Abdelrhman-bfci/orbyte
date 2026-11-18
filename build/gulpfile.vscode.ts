@@ -236,8 +236,7 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 
 		const telemetry = gulp.src('.build/telemetry/**', { base: '.build/telemetry', dot: true });
 		const localLLMResources = gulp.src([
-			`resources/local-llm/${platform}-${arch}/**`,
-			'resources/local-llm/models/**'
+			`resources/local-llm/${platform}-${arch}/**`
 		], { base: '.', dot: true, allowEmpty: false });
 
 		const jsFilter = util.filter(data => !data.isDirectory() && /\.js$/.test(data.path));

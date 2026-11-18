@@ -33,9 +33,8 @@ import { IInstantiationService, ServicesAccessor } from '../../../../platform/in
 import { KeybindingWeight } from '../../../../platform/keybinding/common/keybindingsRegistry.js';
 import { CommandsRegistry } from '../../../../platform/commands/common/commands.js';
 import { FileIconThemeData } from '../../../services/themes/browser/fileIconThemeData.js';
-import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+import { ConfigurationTarget, IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
-import { INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
 
 import { mainWindow } from '../../../../base/browser/window.js';
 import { IPreferencesService } from '../../../services/preferences/common/preferences.js';
@@ -790,55 +789,46 @@ registerAction2(class extends Action2 {
 	constructor() {
 		super({
 			id: toggleLightDarkThemesCommandId,
-			title: localize2('toggleLightDarkThemes.label', 'Toggle between Light/Dark Themes'),
+			title: localize2('toggleLightDarkThemes.label', 'Toggle Orbyte Light/Dark Mode'),
 			category: Categories.Preferences,
 			f1: true,
+			icon: Codicon.colorMode,
+			menu: [
+				{ id: MenuId.CommandCenter, group: 'navigation', order: 2.5 }
+			],
 		});
 	}
 
 	override async run(accessor: ServicesAccessor) {
 		const themeService = accessor.get(IWorkbenchThemeService);
 		const configurationService = accessor.get(IConfigurationService);
-		const notificationService = accessor.get(INotificationService);
-		const preferencesService = accessor.get(IPreferencesService);
 
+		// First launch follows the operating system. Clicking the main-bar control
+		// is an explicit user choice, so manual mode takes over immediately.
 		if (configurationService.getValue(ThemeSettings.DETECT_COLOR_SCHEME)) {
-			const message = localize({ key: 'cannotToggle', comment: ['{0} is a setting name'] }, "Cannot toggle between light and dark themes when `{0}` is enabled in settings.", ThemeSettings.DETECT_COLOR_SCHEME);
-			notificationService.prompt(Severity.Info, message, [
-				{
-					label: localize('goToSetting', "Open Settings"),
-					run: () => {
-						return preferencesService.openUserSettings({ query: ThemeSettings.DETECT_COLOR_SCHEME });
-					}
-				}
-			]);
-			return;
+			await configurationService.updateValue(ThemeSettings.DETECT_COLOR_SCHEME, false, ConfigurationTarget.USER);
 		}
 
 		const currentTheme = themeService.getColorTheme();
-		let newSettingsId: string = ThemeSettings.PREFERRED_DARK_THEME;
+		let targetThemeId = ThemeSettingDefaults.COLOR_THEME_DARK;
 		switch (currentTheme.type) {
 			case ColorScheme.LIGHT:
-				newSettingsId = ThemeSettings.PREFERRED_DARK_THEME;
+				targetThemeId = ThemeSettingDefaults.COLOR_THEME_DARK;
 				break;
 			case ColorScheme.DARK:
-				newSettingsId = ThemeSettings.PREFERRED_LIGHT_THEME;
+				targetThemeId = ThemeSettingDefaults.COLOR_THEME_LIGHT;
 				break;
 			case ColorScheme.HIGH_CONTRAST_LIGHT:
-				newSettingsId = ThemeSettings.PREFERRED_HC_DARK_THEME;
+				targetThemeId = ThemeSettingDefaults.COLOR_THEME_DARK;
 				break;
 			case ColorScheme.HIGH_CONTRAST_DARK:
-				newSettingsId = ThemeSettings.PREFERRED_HC_LIGHT_THEME;
+				targetThemeId = ThemeSettingDefaults.COLOR_THEME_LIGHT;
 				break;
 		}
 
-		const themeSettingId: string = configurationService.getValue(newSettingsId);
-
-		if (themeSettingId && typeof themeSettingId === 'string') {
-			const theme = (await themeService.getColorThemes()).find(t => t.settingsId === themeSettingId);
-			if (theme) {
-				themeService.setColorTheme(theme.id, 'auto');
-			}
+		const theme = (await themeService.getColorThemes()).find(candidate => candidate.settingsId === targetThemeId);
+		if (theme) {
+			await themeService.setColorTheme(theme.id, ConfigurationTarget.USER);
 		}
 	}
 });

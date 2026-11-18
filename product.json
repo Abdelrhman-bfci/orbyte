@@ -37,6 +37,13 @@
 	"urlProtocol": "orbyte",
 	"agentsTelemetryAppName": "agents",
 	"webviewContentExternalBaseUrlTemplate": "https://{{uuid}}.vscode-cdn.net/insider/ef65ac1ba57f57f2a3961bfe94aa20481caca4c6/out/vs/workbench/contrib/webview/browser/pre/",
+	"extensionsGallery": {
+		"serviceUrl": "https://open-vsx.org/vscode/gallery",
+		"controlUrl": "",
+		"extensionUrlTemplate": "https://open-vsx.org/vscode/gallery/{publisher}/{name}/latest",
+		"resourceUrlTemplate": "https://open-vsx.org/vscode/unpkg/{publisher}/{name}/{version}/{path}",
+		"nlsBaseUrl": ""
+	},
 	"builtInExtensions": [
 		{
 			"name": "ms-vscode.js-debug-companion",
@@ -85,8 +92,114 @@
 				},
 				"publisherDisplayName": "Microsoft"
 			}
+		},
+		{
+			"name": "redhat.java",
+			"version": "1.58.0",
+			"sha256": "d0118ef167d598343808bccf3ea54e248d2a1ab297dc02e00b26e7ebec9d0cc4",
+			"repo": "https://github.com/redhat-developer/vscode-java",
+			"metadata": {
+				"id": "redhat.java",
+				"publisherId": { "publisherId": "redhat", "publisherName": "redhat", "displayName": "Red Hat", "flags": "verified" },
+				"publisherDisplayName": "Red Hat"
+			}
+		},
+		{
+			"name": "redhat.vscode-rsp-ui",
+			"version": "0.24.13",
+			"sha256": "127420dcd2cd5429d2b9eef0789a2b7318621894c63c7ba4b971ee4ac07417a7",
+			"repo": "https://github.com/redhat-developer/vscode-rsp-ui",
+			"metadata": {
+				"id": "redhat.vscode-rsp-ui",
+				"publisherId": { "publisherId": "redhat", "publisherName": "redhat", "displayName": "Red Hat", "flags": "verified" },
+				"publisherDisplayName": "Red Hat"
+			}
+		},
+		{
+			"name": "redhat.vscode-server-connector",
+			"version": "0.26.23",
+			"sha256": "a1ecdb65e5f8a51c5827132ab9437d54c111feeb3f97963286de6f913a848250",
+			"repo": "https://github.com/redhat-developer/vscode-server-connector",
+			"metadata": {
+				"id": "redhat.vscode-server-connector",
+				"publisherId": { "publisherId": "redhat", "publisherName": "redhat", "displayName": "Red Hat", "flags": "verified" },
+				"publisherDisplayName": "Red Hat"
+			}
+		},
+		{
+			"name": "vscjava.vscode-java-debug",
+			"version": "0.60.0",
+			"sha256": "f09ebe358a7b08b3c17b21b8d8207b0649acad120eb6f1604dc4f15379f59d66",
+			"repo": "https://github.com/microsoft/vscode-java-debug",
+			"metadata": {
+				"id": "vscjava.vscode-java-debug",
+				"publisherId": { "publisherId": "vscjava", "publisherName": "vscjava", "displayName": "Microsoft", "flags": "verified" },
+				"publisherDisplayName": "Microsoft"
+			}
+		},
+		{
+			"name": "vscjava.vscode-maven",
+			"version": "0.45.3",
+			"sha256": "2d7b30676793604e0c140ab0e5cc5a649d6af2fd9e0b2797911f86a9164654b0",
+			"repo": "https://github.com/microsoft/vscode-maven",
+			"metadata": {
+				"id": "vscjava.vscode-maven",
+				"publisherId": { "publisherId": "vscjava", "publisherName": "vscjava", "displayName": "Microsoft", "flags": "verified" },
+				"publisherDisplayName": "Microsoft"
+			}
+		},
+		{
+			"name": "vscjava.vscode-spring-initializr",
+			"version": "0.12.1",
+			"sha256": "c7160036293c8d191e82f72936bc0bd8186817c369a7a7572f355f0467b588c9",
+			"repo": "https://github.com/microsoft/vscode-spring-initializr",
+			"metadata": {
+				"id": "vscjava.vscode-spring-initializr",
+				"publisherId": { "publisherId": "vscjava", "publisherName": "vscjava", "displayName": "Microsoft", "flags": "verified" },
+				"publisherDisplayName": "Microsoft"
+			}
+		},
+		{
+			"name": "vscjava.vscode-gradle",
+			"version": "3.18.0",
+			"sha256": "a0466d8e44b873d2a4e83155d4b7b68d4ff7d989a618f2f54513ae9d7c686dfa",
+			"repo": "https://github.com/microsoft/vscode-gradle",
+			"metadata": {
+				"id": "vscjava.vscode-gradle",
+				"publisherId": { "publisherId": "vscjava", "publisherName": "vscjava", "displayName": "Microsoft", "flags": "verified" },
+				"publisherDisplayName": "Microsoft"
+			}
+		},
+		{
+			"name": "vmware.vscode-spring-boot",
+			"version": "2.4.1",
+			"sha256": "6971f2bbc513a944e7f907e48ec68f64848d689630d5616bf54ef0803349f6ed",
+			"repo": "https://github.com/spring-projects/spring-tools",
+			"metadata": {
+				"id": "vmware.vscode-spring-boot",
+				"publisherId": { "publisherId": "vmware", "publisherName": "vmware", "displayName": "VMware", "flags": "verified" },
+				"publisherDisplayName": "VMware"
+			}
 		}
 	],
+	"extensionRecommendations": {
+		"k--kato.intellij-idea-keybindings": {
+			"onFileOpen": [
+				{
+					"languages": ["java"],
+					"important": false
+				},
+				{
+					"pathGlob": "**/pom.xml",
+					"important": false
+				},
+				{
+					"pathGlob": "**/build.gradle*",
+					"important": false
+				}
+			]
+		}
+	},
 	"defaultChatAgent": {
 		"extensionId": "GitHub.copilot",
 		"chatExtensionId": "GitHub.copilot-chat",
@@ -202,44 +315,6 @@
 			"label": "Notepad++",
 			"extensionId": "ms-vscode.notepadplusplus-keybindings",
 			"description": "Keyboard mapping from Notepad++"
-		}
-	],
-	"onboardingThemes": [
-		{
-			"id": "dark-2026",
-			"label": "Dark 2026",
-			"themeId": "Dark 2026",
-			"type": "dark"
-		},
-		{
-			"id": "hc-dark",
-			"label": "Dark High Contrast",
-			"themeId": "Default High Contrast",
-			"type": "hcDark"
-		},
-		{
-			"id": "solarized-dark",
-			"label": "Solarized Dark",
-			"themeId": "Solarized Dark",
-			"type": "dark"
-		},
-		{
-			"id": "light-2026",
-			"label": "Light 2026",
-			"themeId": "Light 2026",
-			"type": "light"
-		},
-		{
-			"id": "hc-light",
-			"label": "Light High Contrast",
-			"themeId": "Default High Contrast Light",
-			"type": "hcLight"
-		},
-		{
-			"id": "solarized-light",
-			"label": "Solarized Light",
-			"themeId": "Solarized Light",
-			"type": "light"
 		}
 	],
 	"builtInExtensionsEnabledWithAutoUpdates": [

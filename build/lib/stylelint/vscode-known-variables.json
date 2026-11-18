@@ -1006,6 +1006,18 @@
 		"--vscode-modernSash-gripForeground"
 	],
 	"others": [
+		"--orbyte-accent",
+		"--orbyte-elevated",
+		"--orbyte-hover",
+		"--orbyte-outline",
+		"--orbyte-outline-strong",
+		"--orbyte-radius-md",
+		"--orbyte-radius-sm",
+		"--orbyte-radius-xs",
+		"--orbyte-selected",
+		"--orbyte-shadow",
+		"--orbyte-transition",
+		"--orbyte-vcs-gutter",
 		"--action-widget-close-start-opacity",
 		"--action-widget-close-start-transform",
 		"--activity-bar-action-gap",

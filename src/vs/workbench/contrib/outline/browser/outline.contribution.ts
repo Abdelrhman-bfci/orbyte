@@ -25,7 +25,7 @@ const outlineViewIcon = registerIcon('outline-view-icon', Codicon.symbolClass, l
 
 Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([{
 	id: IOutlinePane.Id,
-	name: localize2('name', "Outline"),
+	name: localize2('name', "Structure"),
 	containerIcon: outlineViewIcon,
 	ctorDescriptor: new SyncDescriptor(OutlinePane),
 	canToggleVisibility: true,

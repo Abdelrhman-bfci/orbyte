@@ -833,36 +833,44 @@ export class OnboardingVariationA extends Disposable implements IOnboardingServi
 
 	private _renderPersonalizeStep(container: HTMLElement): void {
 		const wrapper = append(container, $('.onboarding-a-personalize'));
-
-		// Theme section
-		const themeLabel = append(wrapper, $('div.onboarding-a-section-label'));
-		themeLabel.textContent = localize('onboarding.personalize.theme', "Color Theme");
-
-		const themeHint = append(wrapper, $('div.onboarding-a-theme-hint'));
-		themeHint.textContent = localize('onboarding.personalize.themeHint', "You can browse and install more themes later from the Extensions view.");
-
-		const themeGrid = append(wrapper, $('.onboarding-a-theme-grid'));
-		themeGrid.setAttribute('role', 'radiogroup');
-		themeGrid.setAttribute('aria-label', localize('onboarding.personalize.themeLabel', "Choose a color theme"));
-
 		const hasOtherEditors = this._hasOtherEditors();
 		const allThemes = product.onboardingThemes ?? [];
-		// When other editors are detected, show a compact set (exclude solarized variants).
-		const themes: readonly IOnboardingThemeOption[] = hasOtherEditors
-			? allThemes.filter(t => !t.id.startsWith('solarized'))
-			: allThemes;
 
-		if (!hasOtherEditors) {
-			themeGrid.classList.add('theme-grid-expanded');
-		}
+		if (allThemes.length > 0) {
+			// Theme selection remains available for products that explicitly provide onboarding themes.
+			const themeLabel = append(wrapper, $('div.onboarding-a-section-label'));
+			themeLabel.textContent = localize('onboarding.personalize.theme', "Color Theme");
 
-		const themeCards: HTMLElement[] = [];
-		for (const theme of themes) {
-			this._createThemeCard(themeGrid, theme, themeCards);
-		}
-		// Make all theme cards individually tabbable
-		for (const card of themeCards) {
-			card.setAttribute('tabindex', '0');
+			const themeHint = append(wrapper, $('div.onboarding-a-theme-hint'));
+			themeHint.textContent = localize('onboarding.personalize.themeHint', "You can browse and install more themes later from the Extensions view.");
+
+			const themeGrid = append(wrapper, $('.onboarding-a-theme-grid'));
+			themeGrid.setAttribute('role', 'radiogroup');
+			themeGrid.setAttribute('aria-label', localize('onboarding.personalize.themeLabel', "Choose a color theme"));
+
+			// When other editors are detected, show a compact set (exclude solarized variants).
+			const themes: readonly IOnboardingThemeOption[] = hasOtherEditors
+				? allThemes.filter(t => !t.id.startsWith('solarized'))
+				: allThemes;
+
+			if (!hasOtherEditors) {
+				themeGrid.classList.add('theme-grid-expanded');
+			}
+
+			const themeCards: HTMLElement[] = [];
+			for (const theme of themes) {
+				this._createThemeCard(themeGrid, theme, themeCards);
+			}
+			// Make all theme cards individually tabbable
+			for (const card of themeCards) {
+				card.setAttribute('tabindex', '0');
+			}
+		} else {
+			const appearanceLabel = append(wrapper, $('div.onboarding-a-section-label'));
+			appearanceLabel.textContent = localize('onboarding.personalize.appearance', "Appearance");
+
+			const appearanceHint = append(wrapper, $('div.onboarding-a-theme-hint'));
+			appearanceHint.textContent = localize('onboarding.personalize.appearanceHint', "Orbyte follows your system's light or dark mode automatically. Use the appearance button in the main bar to switch at any time.");
 		}
 
 		// Keyboard Mapping section — only shown when another editor is detected

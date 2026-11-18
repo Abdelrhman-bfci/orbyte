@@ -6,23 +6,104 @@
 
 This repository ("`Code - OSS`") is where we (Microsoft) develop the [Visual Studio Code](https://code.visualstudio.com) product together with the community. Not only do we work on code and issues here, but we also publish our [roadmap](https://github.com/microsoft/vscode/wiki/Roadmap), [monthly iteration plans](https://github.com/microsoft/vscode/wiki/Iteration-Plans), and our [endgame plans](https://github.com/microsoft/vscode/wiki/Running-the-Endgame). This source code is available to everyone under the standard [MIT license](https://github.com/microsoft/vscode/blob/main/LICENSE.txt).
 
-## Building Orbyte Distributions
+## Run Orbyte From Source
 
-Orbyte is this repository's offline-first AI editor distribution. Production builds bundle the local AI integration, `llama-server`, and the default Qwen2.5-Coder GGUF model. Build on the target operating system because Electron and several dependencies contain platform-native binaries.
+Use the Node.js version pinned in [`.nvmrc`](.nvmrc) and the pnpm version pinned in [`package.json`](package.json). The following setup works with `fnm`; `nvm use` is also supported.
+
+### Linux development
+
+Install and compile the repository once:
+
+```bash
+fnm install
+fnm use
+corepack enable
+pnpm install
+pnpm run compile
+```
+
+Launch the IDE:
+
+```bash
+pnpm run orbyte:run:linux
+```
+
+For active development, keep the compiler running in one terminal and launch Orbyte from another:
+
+```bash
+# Terminal 1
+pnpm run watch
+
+# Terminal 2, after the first watch build finishes
+pnpm run orbyte:run:linux
+```
+
+For a fresh compile followed by launch, use the single command:
+
+```bash
+pnpm run orbyte:dev:linux
+```
+
+### Windows development
+
+Run these commands in PowerShell:
+
+```powershell
+fnm install
+fnm use
+corepack enable
+pnpm install
+pnpm run compile
+pnpm run orbyte:run:windows
+```
+
+For active development, run `pnpm run watch` in one PowerShell window. After its first build finishes, run `pnpm run orbyte:run:windows` in a second window. A fresh compile followed by launch is also available as one command:
+
+```powershell
+pnpm run orbyte:dev:windows
+```
+
+The run commands start the development IDE from `.build/electron`; they do not create a distributable application. Use the production commands below to create a portable build or installer.
+
+## Java and Spring Boot
+
+Orbyte bundles Java language support, the Java debugger, Maven, Gradle, and Spring Boot tooling. Open a project folder and Orbyte automatically detects:
+
+- Spring Boot applications from `@SpringBootApplication`, `SpringApplication.run`, and Spring Boot build dependencies.
+- Maven projects and the project-local `mvnw`/`mvnw.cmd` wrapper.
+- Gradle Groovy or Kotlin projects and the project-local `gradlew`/`gradlew.bat` wrapper.
+- Ant projects from `build.xml`, including common run, build, and test targets.
+- Nested projects in multi-root workspaces.
+
+Install a JDK supported by the project, then open its folder. The Spring Boot main class shows **Run Spring Boot** and **Debug Spring Boot** actions above the class. The editor title and Explorer context menu also provide Run, Debug, Build, and Test. Debug launches the Java debugger with breakpoints, stepping, variables, watches, and the debug console; it does not require a hand-written `launch.json`.
+
+Use **Orbyte: Show Java Project Actions** from the Command Palette or click the `Spring Boot · Maven/Gradle/Ant` status item to choose an action. Use **Orbyte: Refresh Java Project Detection** after changing the project layout if automatic refresh has not completed yet.
+
+### EJB and application servers
+
+Orbyte detects deployable Jakarta EE and Java EE projects from Maven, Gradle, or Ant configuration, including EJB JAR, WAR, and EAR packaging. EJB classes annotated with `@Stateless`, `@Stateful`, `@Singleton`, or `@MessageDriven` show a **Build & Deploy EJB** action in the editor.
+
+Open the **Application Servers** section in Explorer and choose **Add Application Server…**. Supported local server installations are:
+
+- JBoss EAP and WildFly: select the installation directory containing `bin/standalone` and `bin/jboss-cli`. Orbyte also bundles Red Hat's JBoss Toolkit and RSP server UI.
+- IBM WebSphere Application Server traditional: select a profile directory containing `bin/startServer`, `bin/stopServer`, and `bin/wsadmin`. If the WebSphere installation directory is selected, Orbyte offers its available profiles.
+
+The server view provides start, stop, build-and-deploy, and Java debugger actions. WildFly can be started directly in JDWP debug mode. For traditional WebSphere, enable debug mode for the JVM in the WebSphere administrative console and use **Attach Java Debugger** with the configured port. Deployment builds the detected project with its Maven or Gradle wrapper (or Ant), selects the newest EAR/WAR/EJB JAR, and deploys it through `jboss-cli` or `wsadmin`.
+
+## Build Orbyte Distributions
+
+Orbyte is this repository's privacy-first AI editor distribution. Production builds bundle the local AI integration and the platform-specific `llama-server`, but they do not bundle a multi-gigabyte GGUF model. On first launch, Orbyte detects the machine's memory, CPU, GPU mode, and free disk space, asks for download approval, and recommends a suitable Qwen2.5-Coder model. Downloaded models are SHA-256 verified and stored in the user's application-data directory instead of the installation directory. Build on the target operating system because Electron and several dependencies contain platform-native binaries. The `orbyte:build:*` scripts stop with a clear error when the current operating system does not match the requested package.
 
 ### Prerequisites
 
 - Node.js and the pnpm version pinned by the `packageManager` field in [`package.json`](package.json).
 - At least 6 GB of available memory for the production bundler.
-- The default model at `resources/local-llm/models/qwen2.5-coder.gguf`.
 - A matching `llama-server` distribution for every target platform. Keep its companion dynamic libraries in the same platform directory.
 
 The expected resource layout is:
 
 ```text
 resources/local-llm/
-├── models/
-│   └── qwen2.5-coder.gguf
 ├── darwin-arm64/
 │   ├── llama-server
 │   └── *.dylib
@@ -49,9 +130,12 @@ On macOS and Linux, make the server executable before packaging:
 chmod +x resources/local-llm/<platform-arch>/llama-server
 ```
 
-Install repository dependencies once before running a build:
+Install repository dependencies once before running a production build:
 
 ```bash
+fnm install
+fnm use
+corepack enable
 pnpm install
 ```
 
@@ -94,16 +178,16 @@ Build the x64 application and per-user installer:
 
 ```powershell
 $env:NODE_OPTIONS = "--max-old-space-size=6144"
-pnpm run gulp vscode-win32-x64
-pnpm run gulp vscode-win32-x64-user-setup
+pnpm run orbyte:build:windows:x64
+pnpm run orbyte:installer:windows:x64
 ```
 
 Build Windows ARM64:
 
 ```powershell
 $env:NODE_OPTIONS = "--max-old-space-size=6144"
-pnpm run gulp vscode-win32-arm64
-pnpm run gulp vscode-win32-arm64-user-setup
+pnpm run orbyte:build:windows:arm64
+pnpm run orbyte:installer:windows:arm64
 ```
 
 The portable application is generated at `..\VSCode-win32-x64\` or `..\VSCode-win32-arm64\`. Per-user installers are generated under `.build\win32-x64\user-setup\` or `.build\win32-arm64\user-setup\`. Replace `user-setup` with `system-setup` to create a machine-wide installer.
@@ -116,7 +200,7 @@ Build the x64 application folder and archive:
 
 ```bash
 export NODE_OPTIONS=--max-old-space-size=6144
-pnpm run gulp vscode-linux-x64
+pnpm run orbyte:build:linux:x64
 tar -czf Orbyte-linux-x64.tar.gz -C .. VSCode-linux-x64
 ```
 
@@ -124,7 +208,7 @@ Build Linux ARM64 by replacing `x64` with `arm64`:
 
 ```bash
 export NODE_OPTIONS=--max-old-space-size=6144
-pnpm run gulp vscode-linux-arm64
+pnpm run orbyte:build:linux:arm64
 tar -czf Orbyte-linux-arm64.tar.gz -C .. VSCode-linux-arm64
 ```
 
@@ -145,6 +229,32 @@ find .build/linux/rpm -name '*.rpm'
 ```
 
 Use the equivalent `arm64` task names for ARM64 packages.
+
+#### Build Linux on macOS with Docker
+
+The Docker build uses an isolated Linux source tree, so it never replaces the macOS `node_modules`. Docker Desktop must be running, and at least 25 GB of free disk space is recommended. Install the checksum-verified `llama.cpp b12387` CPU runtime matching the target architecture:
+
+```bash
+pnpm run orbyte:runtime:linux:x64
+# Or, for Linux ARM64:
+pnpm run orbyte:runtime:linux:arm64
+```
+
+Build the common Linux x64 distribution on either an Intel or Apple Silicon Mac:
+
+```bash
+pnpm run orbyte:build:linux:x64:docker
+```
+
+On Apple Silicon, build Linux ARM64 without x64 emulation:
+
+```bash
+pnpm run orbyte:build:linux:arm64:docker
+```
+
+The completed archive is written to `dist/Orbyte-linux-x64.tar.gz` or `dist/Orbyte-linux-arm64.tar.gz`. The x64 build uses Docker's `linux/amd64` emulation on Apple Silicon and is therefore slower than the ARM64 build.
+
+No GGUF model is copied into the archive. The installed application presents the hardware-matched model picker on first launch and downloads a model only after the user approves it.
 
 ## Visual Studio Code
 

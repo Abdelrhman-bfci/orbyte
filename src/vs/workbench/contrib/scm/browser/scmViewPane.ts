@@ -1613,6 +1613,7 @@ export class SCMViewPane extends ViewPane {
 
 	protected override renderBody(container: HTMLElement): void {
 		super.renderBody(container);
+		container.classList.add('orbyte-scm-pane');
 
 		// Tree
 		this.treeContainer = append(container, $('.scm-view.show-file-icons'));

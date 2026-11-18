@@ -76,6 +76,30 @@ suite('Default theme colors', () => {
 		});
 	}
 
+	test('Orbyte Horizon Dark loads its editor and VCS palette', async () => {
+		const theme = await loadDefaultTheme('orbyte-intellij-dark.json', 'vs-dark');
+		const keyword = theme.tokenColors.findLast(rule => rule.scope === 'keyword' || (Array.isArray(rule.scope) && rule.scope.includes('keyword')))?.settings.foreground;
+		const string = theme.tokenColors.findLast(rule => rule.scope === 'string' || (Array.isArray(rule.scope) && rule.scope.includes('string')))?.settings.foreground;
+
+		assert.deepStrictEqual({
+			editor: theme.getColor('editor.background')?.toString(),
+			sidebar: theme.getColor('sideBar.background')?.toString(),
+			modified: theme.getColor('gitDecoration.modifiedResourceForeground', false)?.toString(),
+			added: theme.getColor('gitDecoration.addedResourceForeground', false)?.toString(),
+			deleted: theme.getColor('gitDecoration.deletedResourceForeground', false)?.toString(),
+			keyword,
+			string,
+		}, {
+			editor: '#08121d',
+			sidebar: '#0b1724',
+			modified: '#159dff',
+			added: '#43f1c8',
+			deleted: '#ff6b68',
+			keyword: '#17E9FF',
+			string: '#43F1C8',
+		});
+	});
+
 	test('Light 2026 inline code and code links remain distinct and readable on Markdown surfaces', async () => {
 		const theme = await loadDefaultTheme('2026-light.json', 'vs');
 		const editorBackground = theme.getColor('editor.background')!;

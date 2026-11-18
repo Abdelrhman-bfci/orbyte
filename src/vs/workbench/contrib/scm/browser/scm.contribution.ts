@@ -55,7 +55,7 @@ const sourceControlViewIcon = registerIcon('source-control-view-icon', Codicon.s
 
 const viewContainer = Registry.as<IViewContainersRegistry>(ViewContainerExtensions.ViewContainersRegistry).registerViewContainer({
 	id: VIEWLET_ID,
-	title: localize2('source control', 'Source Control'),
+	title: localize2('source control', 'Version Control'),
 	ctorDescriptor: new SyncDescriptor(SCMViewPaneContainer),
 	storageId: 'workbench.scm.views.state',
 	icon: sourceControlViewIcon,
@@ -65,7 +65,7 @@ const viewContainer = Registry.as<IViewContainersRegistry>(ViewContainerExtensio
 }, ViewContainerLocation.Sidebar, { doNotRegisterOpenCommand: true });
 
 const viewsRegistry = Registry.as<IViewsRegistry>(ViewContainerExtensions.ViewsRegistry);
-const containerTitle = localize('source control view', "Source Control");
+const containerTitle = localize('source control view', "Version Control");
 
 viewsRegistry.registerViewWelcomeContent(VIEW_PANE_ID, {
 	content: localize('no open repo', "No source control providers registered."),
@@ -91,10 +91,10 @@ viewsRegistry.registerViews([{
 	id: REPOSITORIES_VIEW_PANE_ID,
 	containerTitle,
 	name: localize2('scmRepositories', "Repositories"),
-	singleViewPaneContainerTitle: localize('source control repositories', "Source Control Repositories"),
+	singleViewPaneContainerTitle: localize('source control repositories', "Version Control Repositories"),
 	ctorDescriptor: new SyncDescriptor(SCMRepositoriesViewPane),
 	canToggleVisibility: true,
-	hideByDefault: true,
+	hideByDefault: false,
 	canMoveView: true,
 	weight: 20,
 	order: 0,
@@ -106,7 +106,7 @@ viewsRegistry.registerViews([{
 viewsRegistry.registerViews([{
 	id: VIEW_PANE_ID,
 	containerTitle,
-	name: localize2('scmChanges', 'Changes'),
+	name: localize2('scmChanges', 'Local Changes'),
 	singleViewPaneContainerTitle: containerTitle,
 	ctorDescriptor: new SyncDescriptor(SCMViewPane),
 	canToggleVisibility: true,
@@ -116,7 +116,7 @@ viewsRegistry.registerViews([{
 	containerIcon: sourceControlViewIcon,
 	openCommandActionDescriptor: {
 		id: viewContainer.id,
-		mnemonicTitle: localize({ key: 'miViewSCM', comment: ['&& denotes a mnemonic'] }, "Source &&Control"),
+		mnemonicTitle: localize({ key: 'miViewSCM', comment: ['&& denotes a mnemonic'] }, "Version &&Control"),
 		keybindings: {
 			primary: 0,
 			win: { primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KeyG },
@@ -130,8 +130,8 @@ viewsRegistry.registerViews([{
 viewsRegistry.registerViews([{
 	id: HISTORY_VIEW_PANE_ID,
 	containerTitle,
-	name: localize2('scmGraph', "Graph"),
-	singleViewPaneContainerTitle: localize('source control graph', "Source Control Graph"),
+	name: localize2('scmGraph', "Log"),
+	singleViewPaneContainerTitle: localize('source control graph', "Version Control Log"),
 	ctorDescriptor: new SyncDescriptor(SCMHistoryViewPane),
 	canToggleVisibility: true,
 	canMoveView: true,
@@ -165,7 +165,7 @@ registerWorkbenchContribution2(
 Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerConfiguration({
 	id: 'scm',
 	order: 5,
-	title: localize('scmConfigurationTitle', "Source Control"),
+	title: localize('scmConfigurationTitle', "Version Control"),
 	type: 'object',
 	scope: ConfigurationScope.RESOURCE,
 	properties: {
@@ -241,7 +241,7 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 		'scm.alwaysShowActions': {
 			type: 'boolean',
 			description: localize('alwaysShowActions', "Controls whether inline actions are always visible in the Source Control view."),
-			default: false
+			default: true
 		},
 		'scm.countBadge': {
 			type: 'string',
@@ -273,7 +273,7 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 				localize('scm.defaultViewMode.list', "Show the repository changes as a list.")
 			],
 			description: localize('scm.defaultViewMode', "Controls the default Source Control repository view mode."),
-			default: 'list'
+			default: 'tree'
 		},
 		'scm.defaultViewSortKey': {
 			type: 'string',
@@ -318,7 +318,7 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 		'scm.alwaysShowRepositories': {
 			type: 'boolean',
 			markdownDescription: localize('alwaysShowRepository', "Controls whether repositories should always be visible in the Source Control view."),
-			default: false
+			default: true
 		},
 		'scm.repositories.sortOrder': {
 			type: 'string',
@@ -344,12 +344,12 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 				localize('scm.repositories.selectionMode.single', "Only one repository can be selected at a time.")
 			],
 			description: localize('scm.repositories.selectionMode', "Controls the selection mode of the repositories in the Source Control Repositories view."),
-			default: 'multiple'
+			default: 'single'
 		},
 		'scm.repositories.explorer': {
 			type: 'boolean',
 			markdownDescription: localize('scm.repositories.explorer', "Controls whether to show repository artifacts in the Source Control Repositories view. This feature is experimental and only works when {0} is set to `{1}`.", '\`#scm.repositories.selectionMode#\`', 'single'),
-			default: false,
+			default: true,
 			tags: ['experimental']
 		},
 		'scm.showActionButton': {
@@ -365,7 +365,7 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 		'scm.workingSets.enabled': {
 			type: 'boolean',
 			description: localize('scm.workingSets.enabled', "Controls whether to store editor working sets when switching between source control history item groups."),
-			default: false
+			default: true
 		},
 		'scm.workingSets.default': {
 			type: 'string',
@@ -380,12 +380,12 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 		'scm.compactFolders': {
 			type: 'boolean',
 			description: localize('scm.compactFolders', "Controls whether the Source Control view should render folders in a compact form. In such a form, single child folders will be compressed in a combined tree element."),
-			default: true
+			default: false
 		},
 		'scm.structuralDiff.enabled': {
 			type: 'boolean',
 			description: localize('scm.structuralDiff.enabled', "Controls whether the Source Control view can show the symbols that changed in a file. When enabled and an extension provides structural diffs for the file, use \"Show Structural Diff\" in the \"View & Sort\" menu to show or hide them."),
-			default: false,
+			default: true,
 			tags: ['experimental']
 		},
 		'scm.graph.pageOnScroll': {
@@ -408,7 +408,7 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 				localize('scm.graph.badges.filter', "Show only the badges of history item groups used as a filter in the Source Control Graph view.")
 			],
 			description: localize('scm.graph.badges', "Controls which badges are shown in the Source Control Graph view. The badges are shown on the right side of the graph indicating the names of history item groups."),
-			default: 'filter'
+			default: 'all'
 		},
 		'scm.graph.showIncomingChanges': {
 			type: 'boolean',

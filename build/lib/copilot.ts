@@ -302,8 +302,7 @@ export function prepareBuiltInCopilotRipgrepShim(platform: string, arch: string,
 	const shimMarkerPath = path.join(copilotBase, 'shims.txt');
 
 	try {
-		fs.mkdirSync(ripgrepDest, { recursive: true });
-		fs.cpSync(ripgrepSource, ripgrepDest, { recursive: true });
+		copyRequiredDirectory(ripgrepSource, ripgrepDest, `ripgrep shim for ${platformArch}`);
 
 		fs.writeFileSync(shimMarkerPath, 'Shims created successfully');
 		console.log(`[prepareBuiltInCopilotRipgrepShim] Materialized ripgrep shim for ${platformArch} in ${builtInCopilotExtensionDir}`);
@@ -463,7 +462,43 @@ function copyRequiredDirectory(source: string, target: string, description: stri
 
 	fs.rmSync(target, { recursive: true, force: true });
 	fs.mkdirSync(path.dirname(target), { recursive: true });
-	fs.cpSync(source, target, { recursive: true });
+	try {
+		fs.cpSync(source, target, { recursive: true });
+	} catch (error) {
+		// Node's recursive cp uses a directory-copy syscall that can fail with EACCES
+		// across filesystems such as container /tmp -> Docker Desktop VirtioFS. Copying
+		// each entry still works, so retain the fast path and use this portable fallback.
+		if ((error as NodeJS.ErrnoException).code !== 'EACCES') {
+			throw error;
+		}
+
+		fs.rmSync(target, { recursive: true, force: true });
+		copyDirectoryEntries(source, target);
+	}
+}
+
+function copyDirectoryEntries(source: string, target: string): void {
+	const sourceStat = fs.lstatSync(source);
+	if (sourceStat.isDirectory()) {
+		fs.mkdirSync(target, { recursive: true });
+		for (const entry of fs.readdirSync(source)) {
+			copyDirectoryEntries(path.join(source, entry), path.join(target, entry));
+		}
+		fs.chmodSync(target, sourceStat.mode);
+		return;
+	}
+
+	if (sourceStat.isSymbolicLink()) {
+		fs.symlinkSync(fs.readlinkSync(source), target);
+		return;
+	}
+
+	if (!sourceStat.isFile()) {
+		throw new Error(`[prepareBuiltInCopilotRipgrepShim] Cannot copy unsupported file type at ${source}`);
+	}
+
+	fs.copyFileSync(source, target);
+	fs.chmodSync(target, sourceStat.mode);
 }
 
 function pruneNonTargetCopilotSdkPrebuilds(targetPlatformArch: string, prebuildsDir: string, platformArchs: string[]): void {

@@ -69,6 +69,7 @@ const compilations = [
 	'extensions/microsoft-authentication/tsconfig.json',
 	'extensions/notebook-renderers/tsconfig.json',
 	'extensions/npm/tsconfig.json',
+	'extensions/orbyte-spring/tsconfig.json',
 	'extensions/php-language-features/tsconfig.json',
 	'extensions/references-view/tsconfig.json',
 	'extensions/search-result/tsconfig.json',
@@ -84,7 +85,11 @@ const compilations = [
 	'.vscode/extensions/vscode-selfhost-test-provider/tsconfig.json',
 	'.vscode/extensions/vscode-selfhost-import-aid/tsconfig.json',
 	'.vscode/extensions/vscode-pr-pinger/tsconfig.json',
-];
+].filter(tsconfigFile => {
+	// Source distributions may omit VS Code's developer-only self-host extensions.
+	// Product extension configs remain required and still fail loudly when missing.
+	return !tsconfigFile.startsWith('.vscode/') || fs.existsSync(path.join(root, tsconfigFile));
+});
 
 const getBaseUrl = (out: string) => `https://main.vscode-cdn.net/sourcemaps/${commit}/${out}`;
 

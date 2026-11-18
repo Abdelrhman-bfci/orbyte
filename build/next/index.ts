@@ -708,17 +708,21 @@ async function bundleToOutput(outDir: string, doMinify: boolean, doNls: boolean,
 	// Uses esbuild.transform() as a parser since the bundles are ESM.
 	const postProcessedFiles = new Set([...mangleEdits.keys(), ...nlsEdits.keys()]);
 	if (postProcessedFiles.size > 0) {
-		const errors = (await Promise.all([...postProcessedFiles].map(async jsPath => {
+		const errors: { rel: string; message: string }[] = [];
+		// Parse these large bundles one at a time. Starting every transform at once
+		// can exhaust the esbuild service in memory-constrained cross-build VMs,
+		// causing EPIPE errors instead of reporting an actual syntax error.
+		for (const jsPath of postProcessedFiles) {
 			try {
 				const src = await fs.promises.readFile(jsPath, 'utf-8');
 				await esbuild.transform(src, { loader: 'js', format: 'esm' });
-				return undefined;
 			} catch (e: unknown) {
 				const rel = path.relative(path.join(REPO_ROOT, outDir), jsPath);
 				const message = e instanceof Error ? e.message : String(e);
-				return { rel, message };
+				errors.push({ rel, message });
 			}
-		}))).filter(error => error !== undefined).sort((a, b) => a.rel.localeCompare(b.rel));
+		}
+		errors.sort((a, b) => a.rel.localeCompare(b.rel));
 		if (errors.length > 0) {
 			throw new Error(`[bundle] Syntax errors in post-processed JS files:\n${errors.map(e => `${e.rel}: ${e.message}`).join('\n')}`);
 		}

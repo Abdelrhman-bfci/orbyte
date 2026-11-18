@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
+import { Schemas } from '../../../../../base/common/network.js';
 import { getCodeEditor } from '../../../../../editor/browser/editorBrowser.js';
 import { IPosition } from '../../../../../editor/common/core/position.js';
 import { IRange } from '../../../../../editor/common/core/range.js';
@@ -54,6 +55,12 @@ export class LocalAIContextService implements ILocalAIContextService {
 		const cursor = editor?.getPosition();
 		const selection = editor?.getSelection();
 		if (!editor || !model || !cursor || !selection) {
+			return undefined;
+		}
+		// The empty workbench/Welcome editor can surface as an untitled model whose
+		// path is the workspace root. It is not a source file and including it makes
+		// the model target the project directory instead of the relevant code.
+		if (model.uri.scheme === Schemas.untitled && !model.getValue().trim()) {
 			return undefined;
 		}
 

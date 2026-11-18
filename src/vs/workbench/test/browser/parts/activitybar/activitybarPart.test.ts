@@ -223,7 +223,7 @@ suite('ActivitybarPart', () => {
 			{
 				width: 48,
 				actionHeight: 48,
-				iconSize: 24,
+				iconSize: 28,
 			}
 		);
 	});
@@ -238,7 +238,7 @@ suite('ActivitybarPart', () => {
 			{
 				width: 36,
 				actionHeight: 28,
-				iconSize: 16,
+				iconSize: 22,
 			}
 		);
 	});
@@ -251,9 +251,9 @@ suite('ActivitybarPart', () => {
 				compactWidth: ActivitybarPart.FLOATING_COMPACT_ACTIVITYBAR_WIDTH,
 			},
 			{
-				width: 36,
-				actionHeight: 36,
-				compactWidth: 28,
+				width: 46,
+				actionHeight: 44,
+				compactWidth: 36,
 			}
 		);
 	});
@@ -712,11 +712,11 @@ suite('ActivitybarPart', () => {
 				classicDefault: { compositeSize: 48, overflowActionSize: 48, globalActivities: { actionHeight: 48, actionGap: 0 } },
 				classicCompact: { compositeSize: 28, overflowActionSize: 28, globalActivities: { actionHeight: 28, actionGap: 0 } },
 				// Modern UI separates items with an 8px gap, but only at the default size.
-				modernDefault: { compositeSize: 44, overflowActionSize: 44, globalActivities: { actionHeight: 36, actionGap: 8 } },
+				modernDefault: { compositeSize: 52, overflowActionSize: 52, globalActivities: { actionHeight: 44, actionGap: 8 } },
 				modernCompact: { compositeSize: 28, overflowActionSize: 28, globalActivities: { actionHeight: 28, actionGap: 0 } },
 				// The compact density tightens that gap to 4px, and the stride has to follow it
 				// so items do not collapse into the overflow menu early.
-				modernCompactDensity: { compositeSize: 40, overflowActionSize: 40, globalActivities: { actionHeight: 36, actionGap: 4 } },
+				modernCompactDensity: { compositeSize: 48, overflowActionSize: 48, globalActivities: { actionHeight: 44, actionGap: 4 } },
 			}
 		);
 	});
@@ -735,9 +735,9 @@ suite('ActivitybarPart', () => {
 			}
 		}
 		assert.deepStrictEqual(actual, [
-			{ actionHeight: 36, actionGap: 8, compositeSize: 44, overflowActionSize: 44 },
+			{ actionHeight: 44, actionGap: 8, compositeSize: 52, overflowActionSize: 52 },
 			{ actionHeight: 28, actionGap: 0, compositeSize: 28, overflowActionSize: 28 },
-			{ actionHeight: 36, actionGap: 4, compositeSize: 40, overflowActionSize: 40 },
+			{ actionHeight: 44, actionGap: 4, compositeSize: 48, overflowActionSize: 48 },
 			{ actionHeight: 28, actionGap: 0, compositeSize: 28, overflowActionSize: 28 },
 		]);
 	});
@@ -758,9 +758,9 @@ suite('ActivitybarPart', () => {
 		await configService.setUserConfiguration(LayoutSettings.MODERN_UI_EDITOR_TAB_STYLE, ModernUIEditorTabStyle.Connected);
 		fireConfigChange(configService, LayoutSettings.MODERN_UI_EDITOR_TAB_STYLE);
 		assert.deepStrictEqual({ connected, pill, restored: capture() }, {
-			connected: { width: '36px', height: '36px' },
-			pill: { width: '36px', height: '36px' },
-			restored: { width: '36px', height: '36px' },
+			connected: { width: '46px', height: '44px' },
+			pill: { width: '46px', height: '44px' },
+			restored: { width: '46px', height: '44px' },
 		});
 	});
 
