@@ -194,6 +194,8 @@ The portable application is generated at `..\VSCode-win32-x64\` or `..\VSCode-wi
 
 Official distribution should sign the application binaries and installer with a trusted Windows code-signing certificate. The setup tasks can receive the repository's `--sign` option when the signing environment is configured.
 
+To build and smoke-test the Windows x64 installer without a local Windows machine, run the **Build and test Windows x64 installer** workflow in GitHub Actions. It builds on a native Windows x64 runner, silently installs Orbyte into a temporary directory, verifies both executables are x64 PE files, launches the installed application with `--version`, rejects bundled `.gguf` and `.safetensors` model files, and uploads `OrbyteUserSetup-x64.exe` as the `Orbyte-Windows-x64-tested-installer` artifact.
+
 ### Linux
 
 Build the x64 application folder and archive:

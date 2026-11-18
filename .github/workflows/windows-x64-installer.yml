@@ -1,0 +1,141 @@
+name: Build and test Windows x64 installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/windows-x64-installer
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64:
+    name: Windows x64 installer
+    runs-on: windows-2025
+    timeout-minutes: 120
+    env:
+      NODE_OPTIONS: --max-old-space-size=8192
+      npm_config_arch: x64
+      VSCODE_ARCH: x64
+
+    steps:
+      - name: Check out Orbyte
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Enable Windows long paths
+        shell: pwsh
+        run: git config --global core.longpaths true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install pinned pnpm
+        shell: pwsh
+        run: npm install --global pnpm@12.16.0
+
+      - name: Install dependencies
+        shell: pwsh
+        run: pnpm install --frozen-lockfile
+
+      - name: Compile Orbyte
+        shell: pwsh
+        run: pnpm run compile
+
+      - name: Package native Windows x64 application
+        shell: pwsh
+        run: pnpm run orbyte:build:windows:x64
+
+      - name: Build per-user installer
+        shell: pwsh
+        run: pnpm run orbyte:installer:windows:x64
+
+      - name: Validate, install, and launch Orbyte
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $portableDir = (Resolve-Path '..\VSCode-win32-x64').Path
+          $installer = (Resolve-Path '.build\win32-x64\user-setup\VSCodeSetup.exe').Path
+          $artifactDir = Join-Path $PWD 'windows-x64-artifacts'
+          $installDir = Join-Path $env:RUNNER_TEMP 'OrbyteSmokeTest'
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+
+          function Assert-X64Pe([string] $Path) {
+            $bytes = [System.IO.File]::ReadAllBytes($Path)
+            if ($bytes.Length -lt 64 -or $bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) {
+              throw "$Path is not a Windows PE executable."
+            }
+            $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+            $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+            if ($machine -ne 0x8664) {
+              throw ("{0} is not Windows x64 (machine 0x{1:x4})." -f $Path, $machine)
+            }
+          }
+
+          Assert-X64Pe $installer
+          $portableExe = Join-Path $portableDir 'Orbyte.exe'
+          if (-not (Test-Path $portableExe)) {
+            throw "Portable Orbyte.exe was not generated."
+          }
+          Assert-X64Pe $portableExe
+
+          $bundledModels = Get-ChildItem $portableDir -Recurse -File -ErrorAction Stop |
+            Where-Object { $_.Extension -in '.gguf', '.safetensors' }
+          if ($bundledModels) {
+            throw "The package unexpectedly contains local LLM model files: $($bundledModels.FullName -join ', ')"
+          }
+
+          if (Test-Path $installDir) {
+            Remove-Item $installDir -Recurse -Force
+          }
+          $setup = Start-Process -FilePath $installer -ArgumentList @(
+            '/VERYSILENT',
+            '/SUPPRESSMSGBOXES',
+            '/NORESTART',
+            '/SP-',
+            "/DIR=$installDir"
+          ) -PassThru -Wait
+          if ($setup.ExitCode -ne 0) {
+            throw "The installer exited with code $($setup.ExitCode)."
+          }
+
+          $installedExe = Join-Path $installDir 'Orbyte.exe'
+          if (-not (Test-Path $installedExe)) {
+            throw "The installer completed but Orbyte.exe is missing from $installDir."
+          }
+          Assert-X64Pe $installedExe
+
+          $stdout = Join-Path $env:RUNNER_TEMP 'orbyte-version.txt'
+          $stderr = Join-Path $env:RUNNER_TEMP 'orbyte-version-error.txt'
+          $launch = Start-Process -FilePath $installedExe -ArgumentList '--version' `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -Wait
+          if ($launch.ExitCode -ne 0) {
+            $errorText = if (Test-Path $stderr) { Get-Content $stderr -Raw } else { '' }
+            throw "Installed Orbyte failed to launch (exit $($launch.ExitCode)): $errorText"
+          }
+
+          $versionText = (Get-Content $stdout -Raw).Trim()
+          if (-not $versionText) {
+            throw 'Installed Orbyte launched but returned no version.'
+          }
+          Write-Host "Installed Orbyte version: $versionText"
+
+          $publishedInstaller = Join-Path $artifactDir 'OrbyteUserSetup-x64.exe'
+          Copy-Item $installer $publishedInstaller -Force
+          $hash = (Get-FileHash $publishedInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  OrbyteUserSetup-x64.exe" | Set-Content `
+            (Join-Path $artifactDir 'OrbyteUserSetup-x64.sha256') -Encoding ascii
+
+      - name: Upload tested installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Orbyte-Windows-x64-tested-installer
+          path: windows-x64-artifacts/*
+          if-no-files-found: error
+          retention-days: 14
