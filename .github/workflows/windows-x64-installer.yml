@@ -178,7 +178,7 @@ jobs:
           }
           $cliOutput = & $installedCli --version 2>&1
           if ($LASTEXITCODE -ne 0) {
-            throw "The installed Orbyte CLI failed with exit $LASTEXITCODE: $($cliOutput -join [Environment]::NewLine)"
+            throw "The installed Orbyte CLI failed with exit ${LASTEXITCODE}: $($cliOutput -join [Environment]::NewLine)"
           }
           $versionText = ($cliOutput | Out-String).Trim()
           if (-not $versionText) {
