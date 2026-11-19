@@ -119,26 +119,34 @@ jobs:
             throw "Portable Orbyte.exe was not generated."
           }
           Assert-X64Pe $portableExe
+          Write-Host 'Validated the installer bootstrap and portable x64 executable.'
 
           $bundledModels = Get-ChildItem $portableDir -Recurse -File -ErrorAction Stop |
             Where-Object { $_.Extension -in '.gguf', '.safetensors' }
           if ($bundledModels) {
             throw "The package unexpectedly contains local LLM model files: $($bundledModels.FullName -join ', ')"
           }
+          Write-Host 'Confirmed that no local LLM model files are bundled.'
 
           if (Test-Path $installDir) {
             Remove-Item $installDir -Recurse -Force
           }
+          Write-Host "Installing Orbyte into $installDir ..."
           $setup = Start-Process -FilePath $installer -ArgumentList @(
             '/VERYSILENT',
             '/SUPPRESSMSGBOXES',
             '/NORESTART',
             '/SP-',
             "/DIR=$installDir"
-          ) -PassThru -Wait
+          ) -PassThru
+          if (-not $setup.WaitForExit(600000)) {
+            $setup.Kill($true)
+            throw 'The installer did not finish within 10 minutes.'
+          }
           if ($setup.ExitCode -ne 0) {
             throw "The installer exited with code $($setup.ExitCode)."
           }
+          Write-Host 'The silent installation completed successfully.'
 
           $installedExe = Join-Path $installDir 'Orbyte.exe'
           if (-not (Test-Path $installedExe)) {
@@ -148,8 +156,14 @@ jobs:
 
           $stdout = Join-Path $env:RUNNER_TEMP 'orbyte-version.txt'
           $stderr = Join-Path $env:RUNNER_TEMP 'orbyte-version-error.txt'
+          Write-Host 'Launching the installed Orbyte executable with --version ...'
           $launch = Start-Process -FilePath $installedExe -ArgumentList '--version' `
-            -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -Wait
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+          if (-not $launch.WaitForExit(60000)) {
+            $launch.Kill($true)
+            throw 'Installed Orbyte did not finish the --version check within 60 seconds.'
+          }
+          $launch.WaitForExit()
           if ($launch.ExitCode -ne 0) {
             $errorText = if (Test-Path $stderr) { Get-Content $stderr -Raw } else { '' }
             throw "Installed Orbyte failed to launch (exit $($launch.ExitCode)): $errorText"
