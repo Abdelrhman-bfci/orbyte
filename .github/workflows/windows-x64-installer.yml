@@ -169,9 +169,20 @@ jobs:
             throw "Installed Orbyte failed to launch (exit $($launch.ExitCode)): $errorText"
           }
 
-          $versionText = (Get-Content $stdout -Raw).Trim()
+          # A Windows GUI-subsystem executable can exit successfully without
+          # forwarding stdout. Exercise the installed CLI wrapper as well so
+          # the version assertion is independent of GUI stdout behavior.
+          $installedCli = Join-Path $installDir 'bin\orbyte.cmd'
+          if (-not (Test-Path $installedCli)) {
+            throw "The installer completed but the Orbyte CLI is missing from $installedCli."
+          }
+          $cliOutput = & $installedCli --version 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            throw "The installed Orbyte CLI failed with exit $LASTEXITCODE: $($cliOutput -join [Environment]::NewLine)"
+          }
+          $versionText = ($cliOutput | Out-String).Trim()
           if (-not $versionText) {
-            throw 'Installed Orbyte launched but returned no version.'
+            throw 'The installed Orbyte CLI returned no version.'
           }
           Write-Host "Installed Orbyte version: $versionText"
 
