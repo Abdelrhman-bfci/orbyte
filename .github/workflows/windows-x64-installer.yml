@@ -87,19 +87,33 @@ jobs:
           $installDir = Join-Path $env:RUNNER_TEMP 'OrbyteSmokeTest'
           New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
 
-          function Assert-X64Pe([string] $Path) {
+          function Get-PeMachine([string] $Path) {
             $bytes = [System.IO.File]::ReadAllBytes($Path)
             if ($bytes.Length -lt 64 -or $bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) {
               throw "$Path is not a Windows PE executable."
             }
             $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
-            $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+            return [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          }
+
+          function Assert-WindowsPe([string] $Path) {
+            $machine = Get-PeMachine $Path
+            if ($machine -notin 0x014c, 0x8664) {
+              throw ("{0} has an unsupported PE machine type (0x{1:x4})." -f $Path, $machine)
+            }
+          }
+
+          function Assert-X64Pe([string] $Path) {
+            $machine = Get-PeMachine $Path
             if ($machine -ne 0x8664) {
               throw ("{0} is not Windows x64 (machine 0x{1:x4})." -f $Path, $machine)
             }
           }
 
-          Assert-X64Pe $installer
+          # Inno Setup uses an x86 bootstrap executable even when its installed
+          # application payload is x64. Validate the bootstrap as Windows PE,
+          # then enforce x64 on Orbyte.exe before and after installation.
+          Assert-WindowsPe $installer
           $portableExe = Join-Path $portableDir 'Orbyte.exe'
           if (-not (Test-Path $portableExe)) {
             throw "Portable Orbyte.exe was not generated."
