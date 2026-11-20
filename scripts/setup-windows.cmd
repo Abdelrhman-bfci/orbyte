@@ -52,6 +52,9 @@ if /i not "%ORBYTE_ACTIVE_PNPM%"=="%ORBYTE_PNPM_VERSION%" (
 	exit /b 1
 )
 
+call :ensure_cpp_build_tools
+if errorlevel 1 exit /b 1
+
 set "NODE_OPTIONS=--max-old-space-size=8192"
 echo [Orbyte] Installing repository dependencies...
 pnpm install --frozen-lockfile
@@ -60,4 +63,48 @@ if errorlevel 1 exit /b 1
 echo [Orbyte] Setup complete with Node.js %ORBYTE_ACTIVE_NODE% and pnpm %ORBYTE_ACTIVE_PNPM%.
 echo [Orbyte] Run: pnpm run compile
 echo [Orbyte] Then: pnpm run orbyte:run:windows
+exit /b 0
+
+:ensure_cpp_build_tools
+call :has_cpp_build_tools
+if not errorlevel 1 exit /b 0
+
+where winget >nul 2>nul
+if errorlevel 1 (
+	echo [Orbyte] Visual Studio C++ Build Tools are required but were not found.
+	echo [Orbyte] Install the Desktop development with C++ workload and a Windows SDK.
+	echo [Orbyte] See https://learn.microsoft.com/cpp/overview/acquire-msvc
+	exit /b 1
+)
+
+echo [Orbyte] Visual Studio C++ Build Tools were not found.
+echo [Orbyte] Installing the stable Build Tools with the C++ workload and Windows SDK...
+echo [Orbyte] Accept the Windows elevation prompt. This download can take several minutes.
+winget install --id Microsoft.VisualStudio.BuildTools -e --accept-package-agreements --accept-source-agreements --override "--wait --passive --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+if errorlevel 1 (
+	echo [Orbyte] Visual Studio Build Tools installation failed.
+	exit /b 1
+)
+
+call :has_cpp_build_tools
+if errorlevel 1 (
+	echo [Orbyte] Build Tools finished installing, but the C++ toolchain was not detected.
+	echo [Orbyte] Open Visual Studio Installer, select Build Tools, and add Desktop development with C++.
+	echo [Orbyte] Include MSVC x64/x86 build tools and a Windows 10 or Windows 11 SDK.
+	exit /b 1
+)
+exit /b 0
+
+:has_cpp_build_tools
+if defined vs2026_install if exist "%vs2026_install%\VC\Tools\MSVC\*" exit /b 0
+if defined vs2022_install if exist "%vs2022_install%\VC\Tools\MSVC\*" exit /b 0
+if defined vs2019_install if exist "%vs2019_install%\VC\Tools\MSVC\*" exit /b 0
+
+for %%y in (18 2022 2019) do (
+	for %%e in (BuildTools Community Professional Enterprise Preview IntPreview) do (
+		if exist "%ProgramFiles%\Microsoft Visual Studio\%%y\%%e\VC\Tools\MSVC\*" exit /b 0
+		if exist "%ProgramFiles(x86)%\Microsoft Visual Studio\%%y\%%e\VC\Tools\MSVC\*" exit /b 0
+	)
+)
+exit /b 1
 

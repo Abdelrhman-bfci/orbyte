@@ -61,11 +61,13 @@ pnpm run orbyte:run:windows
 ```
 
 The setup script installs `fnm` with WinGet when necessary, activates Node.js
-24.22.1, installs pnpm 12.16.0, and installs the repository dependencies. It
-stops with a clear message if the active versions do not match the versions
-pinned by the repository. If WinGet has just installed `fnm` but Windows has
-not refreshed `PATH`, close Command Prompt, open a new one, and run the setup
-script again.
+24.22.1, installs pnpm 12.16.0, checks for the Visual Studio C++ toolchain, and
+installs the stable Visual Studio Build Tools with the **Desktop development
+with C++** workload and recommended Windows SDK when they are missing. Accept
+the Windows elevation prompt when it appears. The script then installs all
+repository dependencies and stops on the first failed prerequisite. If WinGet
+has just installed `fnm` but Windows has not refreshed `PATH`, close Command
+Prompt, open a new one, and run the setup script again.
 
 For an existing clone, update it before running the setup:
 
