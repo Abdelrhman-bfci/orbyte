@@ -49,13 +49,29 @@ if /i not "%ORBYTE_ACTIVE_NODE%"=="v%ORBYTE_NODE_VERSION%" (
 	exit /b 1
 )
 
+set "ORBYTE_ACTIVE_PNPM="
+for /f "delims=" %%v in ('pnpm --version') do set "ORBYTE_ACTIVE_PNPM=%%v"
+if /i "%ORBYTE_ACTIVE_PNPM%"=="%ORBYTE_PNPM_VERSION%" goto pnpm_ready
+
 echo [Orbyte] Installing pnpm %ORBYTE_PNPM_VERSION%...
+rem The setup can be launched by a pnpm script, whose Electron native-build
+rem variables are not valid npm configuration for this global tool install.
+set "npm_config_build_from_source="
+set "npm_config_disturl="
+set "npm_config_ms_build_id="
+set "npm_config_runtime="
+set "npm_config_target="
+set "npm_config_force_process_config="
 rem Modern npm versions block dependency lifecycle scripts unless the package is
-rem explicitly allowed. Authorize only pnpm's own install scripts.
-npm install --global --allow-scripts=pnpm pnpm@%ORBYTE_PNPM_VERSION%
+rem explicitly allowed. Authorize only pnpm's own install scripts. npm is a
+rem .cmd shim on Windows, so CALL is required to return to this script.
+call npm install --global --allow-scripts=pnpm pnpm@%ORBYTE_PNPM_VERSION%
 if errorlevel 1 exit /b 1
 
+set "ORBYTE_ACTIVE_PNPM="
 for /f "delims=" %%v in ('pnpm --version') do set "ORBYTE_ACTIVE_PNPM=%%v"
+
+:pnpm_ready
 if /i not "%ORBYTE_ACTIVE_PNPM%"=="%ORBYTE_PNPM_VERSION%" (
 	echo [Orbyte] Expected pnpm %ORBYTE_PNPM_VERSION%, but found %ORBYTE_ACTIVE_PNPM%.
 	exit /b 1
@@ -71,7 +87,8 @@ set "NODE_ENV="
 set "NPM_CONFIG_PRODUCTION="
 set "PNPM_CONFIG_PROD="
 echo [Orbyte] Installing repository dependencies...
-pnpm install --frozen-lockfile --prod=false
+rem pnpm can also be a .cmd shim, so CALL is required to continue afterward.
+call pnpm install --frozen-lockfile --prod=false
 if errorlevel 1 exit /b 1
 
 if not exist "node_modules\.bin\npm-run-all2.cmd" (
