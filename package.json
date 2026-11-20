@@ -44,7 +44,7 @@
     "orbyte:build:windows:arm64": "node scripts/orbyte-build.mjs win32 arm64",
     "orbyte:installer:windows:x64": "node scripts/orbyte-build.mjs win32 x64 user-setup",
     "orbyte:installer:windows:arm64": "node scripts/orbyte-build.mjs win32 arm64 user-setup",
-    "compile": "npm-run-all2 -lp compile-client compile-copilot",
+    "compile": "node scripts/orbyte-compile.mjs",
     "compile-client": "pnpm run gulp compile",
     "compile-copilot": "pnpm -C extensions/copilot run compile",
     "build-fast": "node build/next/build-fast.ts",
