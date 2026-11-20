@@ -46,7 +46,26 @@ pnpm run orbyte:dev:linux
 
 ### Windows development
 
-Run these commands in PowerShell:
+Use 64-bit Windows with Git, `fnm`, Python 3, and Visual Studio 2022 Build Tools
+with **Desktop development with C++** and a Windows SDK installed. Keep at least
+30 GB free for dependencies, compilation output, and the packaged application.
+
+Clone, compile, and launch from Command Prompt (`cmd.exe`):
+
+```bat
+git clone https://github.com/Abdelrhman-bfci/orbyte.git
+cd orbyte
+fnm env --use-on-cd --shell cmd | call
+fnm install 24.22.1
+fnm use 24.22.1
+npm install --global pnpm@12.16.0
+set NODE_OPTIONS=--max-old-space-size=8192
+pnpm install --frozen-lockfile
+pnpm run compile
+pnpm run orbyte:run:windows
+```
+
+The equivalent commands in PowerShell are:
 
 ```powershell
 fnm install
@@ -178,6 +197,14 @@ Build the x64 application and per-user installer:
 
 ```powershell
 $env:NODE_OPTIONS = "--max-old-space-size=6144"
+pnpm run orbyte:build:windows:x64
+pnpm run orbyte:installer:windows:x64
+```
+
+From Command Prompt (`cmd.exe`), use:
+
+```bat
+set NODE_OPTIONS=--max-old-space-size=8192
 pnpm run orbyte:build:windows:x64
 pnpm run orbyte:installer:windows:x64
 ```
