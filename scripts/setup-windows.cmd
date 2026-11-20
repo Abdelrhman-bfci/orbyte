@@ -2,6 +2,13 @@
 set "ORBYTE_NODE_VERSION=24.22.1"
 set "ORBYTE_PNPM_VERSION=12.16.0"
 
+rem Always run from the repository root, even when this script was called by path.
+cd /d "%~dp0.."
+if errorlevel 1 (
+	echo [Orbyte] Could not enter the repository root.
+	exit /b 1
+)
+
 where fnm >nul 2>nul
 if errorlevel 1 (
 	where winget >nul 2>nul
@@ -56,9 +63,20 @@ call :ensure_cpp_build_tools
 if errorlevel 1 exit /b 1
 
 set "NODE_OPTIONS=--max-old-space-size=8192"
+rem A machine-wide production setting makes pnpm omit build tools such as
+rem npm-run-all2. Orbyte is a source checkout, so its devDependencies are required.
+set "NODE_ENV="
+set "NPM_CONFIG_PRODUCTION="
+set "PNPM_CONFIG_PROD="
 echo [Orbyte] Installing repository dependencies...
-pnpm install --frozen-lockfile
+pnpm install --frozen-lockfile --prod=false
 if errorlevel 1 exit /b 1
+
+if not exist "node_modules\.bin\npm-run-all2.cmd" (
+	echo [Orbyte] Dependency installation finished without npm-run-all2.
+	echo [Orbyte] Remove any system NODE_ENV=production setting and run this script again.
+	exit /b 1
+)
 
 echo [Orbyte] Setup complete with Node.js %ORBYTE_ACTIVE_NODE% and pnpm %ORBYTE_ACTIVE_PNPM%.
 echo [Orbyte] Run: pnpm run compile

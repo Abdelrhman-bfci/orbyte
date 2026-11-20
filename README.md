@@ -69,6 +69,11 @@ repository dependencies and stops on the first failed prerequisite. If WinGet
 has just installed `fnm` but Windows has not refreshed `PATH`, close Command
 Prompt, open a new one, and run the setup script again.
 
+The source build requires development dependencies. The setup script clears a
+machine-wide `NODE_ENV=production`/pnpm production-only setting, installs with
+`--prod=false`, and verifies `node_modules\.bin\npm-run-all2.cmd` before it
+reports success.
+
 For an existing clone, update it before running the setup:
 
 ```bat
