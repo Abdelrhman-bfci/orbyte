@@ -90,7 +90,7 @@ The equivalent commands in PowerShell are:
 fnm env --use-on-cd --shell powershell | Out-String | Invoke-Expression
 fnm install 24.22.1
 fnm use 24.22.1
-npm install --global pnpm@12.16.0
+npm install --global --allow-scripts=pnpm pnpm@12.16.0
 $env:NODE_OPTIONS = '--max-old-space-size=8192'
 pnpm install --frozen-lockfile
 pnpm run compile

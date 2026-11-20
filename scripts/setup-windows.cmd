@@ -50,7 +50,9 @@ if /i not "%ORBYTE_ACTIVE_NODE%"=="v%ORBYTE_NODE_VERSION%" (
 )
 
 echo [Orbyte] Installing pnpm %ORBYTE_PNPM_VERSION%...
-npm install --global pnpm@%ORBYTE_PNPM_VERSION%
+rem Modern npm versions block dependency lifecycle scripts unless the package is
+rem explicitly allowed. Authorize only pnpm's own install scripts.
+npm install --global --allow-scripts=pnpm pnpm@%ORBYTE_PNPM_VERSION%
 if errorlevel 1 exit /b 1
 
 for /f "delims=" %%v in ('pnpm --version') do set "ORBYTE_ACTIVE_PNPM=%%v"
