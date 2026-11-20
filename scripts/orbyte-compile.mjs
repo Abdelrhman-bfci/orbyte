@@ -13,27 +13,30 @@ const runner = path.join(repositoryRoot, 'node_modules', 'npm-run-all2', 'bin', 
 if (!existsSync(runner)) {
 	console.log('[Orbyte] Development dependencies are incomplete; repairing them before compilation...');
 
-	const blockedEnvironmentKeys = new Set(['node_env', 'npm_config_production', 'pnpm_config_prod']);
-	const installEnvironment = Object.fromEntries(
-		Object.entries(process.env).filter(([key]) => !blockedEnvironmentKeys.has(key.toLowerCase()))
-	);
-
-	const installArguments = ['install', '--frozen-lockfile', '--prod=false'];
-	const install = process.platform === 'win32'
-		? spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `pnpm ${installArguments.join(' ')}`], {
+	let install;
+	if (process.platform === 'win32') {
+		console.log('[Orbyte] Running the complete Windows prerequisite setup...');
+		const setupScript = path.join(repositoryRoot, 'scripts', 'setup-windows.cmd');
+		install = spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/c', `call "${setupScript}"`], {
 			cwd: repositoryRoot,
-			env: installEnvironment,
+			env: process.env,
 			stdio: 'inherit',
-		})
-		: spawnSync('pnpm', installArguments, {
+		});
+	} else {
+		const blockedEnvironmentKeys = new Set(['node_env', 'npm_config_production', 'pnpm_config_prod']);
+		const installEnvironment = Object.fromEntries(
+			Object.entries(process.env).filter(([key]) => !blockedEnvironmentKeys.has(key.toLowerCase()))
+		);
+		install = spawnSync('pnpm', ['install', '--frozen-lockfile', '--prod=false'], {
 			cwd: repositoryRoot,
 			env: installEnvironment,
 			stdio: 'inherit',
 		});
+	}
 
 	if (install.error || install.status !== 0) {
-		console.error('[Orbyte] Could not install the required development dependencies.');
-		console.error('[Orbyte] Run scripts\\setup-windows.cmd from Command Prompt, then retry.');
+		console.error('[Orbyte] Could not prepare the required compiler toolchain and development dependencies.');
+		console.error('[Orbyte] On Windows, run scripts\\setup-windows.cmd from an Administrator Command Prompt.');
 		process.exit(install.status || 1);
 	}
 }
