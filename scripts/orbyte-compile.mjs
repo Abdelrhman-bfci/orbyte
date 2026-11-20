@@ -16,8 +16,10 @@ if (!existsSync(runner)) {
 	let install;
 	if (process.platform === 'win32') {
 		console.log('[Orbyte] Running the complete Windows prerequisite setup...');
-		const setupScript = path.join(repositoryRoot, 'scripts', 'setup-windows.cmd');
-		install = spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/c', `call "${setupScript}"`], {
+		// Use a path relative to cwd. Embedding a quoted absolute path in the /c
+		// argument makes Node escape the quotes on Windows, so cmd.exe sees the
+		// literal characters \"...\" and rejects the command.
+		install = spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/c', 'scripts\\setup-windows.cmd'], {
 			cwd: repositoryRoot,
 			env: process.env,
 			stdio: 'inherit',
