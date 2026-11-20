@@ -55,12 +55,24 @@ Clone, compile, and launch from Command Prompt (`cmd.exe`):
 ```bat
 git clone https://github.com/Abdelrhman-bfci/orbyte.git
 cd orbyte
-fnm env --use-on-cd --shell cmd | call
-fnm install 24.22.1
-fnm use 24.22.1
-npm install --global pnpm@12.16.0
-set NODE_OPTIONS=--max-old-space-size=8192
-pnpm install --frozen-lockfile
+call scripts\setup-windows.cmd
+pnpm run compile
+pnpm run orbyte:run:windows
+```
+
+The setup script installs `fnm` with WinGet when necessary, activates Node.js
+24.22.1, installs pnpm 12.16.0, and installs the repository dependencies. It
+stops with a clear message if the active versions do not match the versions
+pinned by the repository. If WinGet has just installed `fnm` but Windows has
+not refreshed `PATH`, close Command Prompt, open a new one, and run the setup
+script again.
+
+For an existing clone, update it before running the setup:
+
+```bat
+cd /d D:\docker\orbyte
+git pull origin main
+call scripts\setup-windows.cmd
 pnpm run compile
 pnpm run orbyte:run:windows
 ```
@@ -68,10 +80,12 @@ pnpm run orbyte:run:windows
 The equivalent commands in PowerShell are:
 
 ```powershell
-fnm install
-fnm use
-corepack enable
-pnpm install
+fnm env --use-on-cd --shell powershell | Out-String | Invoke-Expression
+fnm install 24.22.1
+fnm use 24.22.1
+npm install --global pnpm@12.16.0
+$env:NODE_OPTIONS = '--max-old-space-size=8192'
+pnpm install --frozen-lockfile
 pnpm run compile
 pnpm run orbyte:run:windows
 ```
