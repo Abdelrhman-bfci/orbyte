@@ -11,12 +11,15 @@ import { configuredJdkEnvironment } from './jdkRuntime';
 type BuildTool = 'maven' | 'gradle' | 'ant' | 'java';
 type ProjectAction = 'run' | 'debug' | 'build' | 'test';
 type ActiveApplicationMode = 'run' | 'debug';
+type JavaFramework = 'spring-boot' | 'quarkus' | 'micronaut' | 'helidon' | 'vertx' | 'jakarta-ee' | 'java';
 
 interface IJavaProject {
 	readonly folder: vscode.WorkspaceFolder;
 	readonly root: vscode.Uri;
 	readonly name: string;
 	readonly buildTool: BuildTool;
+	readonly framework: JavaFramework;
+	readonly enterprise: boolean;
 	readonly springBoot: boolean;
 	readonly springDevtools: boolean;
 	readonly mainClass?: string;
@@ -75,6 +78,16 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 			vscode.commands.registerCommand('orbyte.spring.test', (uri?: vscode.Uri) => this.execute('test', uri)),
 			vscode.commands.registerCommand('orbyte.spring.refreshProjects', () => this.refresh(true)),
 			vscode.commands.registerCommand('orbyte.spring.showProjectActions', () => this.showProjectActions()),
+			vscode.commands.registerCommand('orbyte.java.listApplications', () => this.projects.map(project => ({
+				id: project.root.fsPath,
+				name: project.name,
+				framework: frameworkLabel(project.framework),
+				language: 'Java',
+				root: project.root.fsPath,
+				enterprise: project.enterprise,
+			}))),
+			vscode.commands.registerCommand('orbyte.java.runApplication', (projectPath: string, mode: ActiveApplicationMode = 'run', programArgs = '') => this.runProjectByPath(projectPath, mode, programArgs)),
+			vscode.commands.registerCommand('orbyte.java.stopApplication', (projectPath: string) => this.stopProjectByPath(projectPath)),
 			vscode.tasks.onDidStartTask(event => this.trackTask(event.execution)),
 			vscode.tasks.onDidEndTask(event => this.untrackTask(event.execution)),
 			vscode.debug.onDidStartDebugSession(session => this.trackDebugSession(session)),
@@ -121,7 +134,7 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 
 	provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
 		const text = document.getText();
-		if (!(JAVA_MAIN_PATTERN.test(text) || KOTLIN_MAIN_PATTERN.test(text)) || !SPRING_MAIN_PATTERN.test(text)) {
+		if (!(JAVA_MAIN_PATTERN.test(text) || KOTLIN_MAIN_PATTERN.test(text))) {
 			return [];
 		}
 		const mainMatch = /\b(?:static\s+void|fun)\s+main\s*\(/.exec(text);
@@ -129,15 +142,16 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 		const offset = annotationMatch?.index ?? mainMatch?.index ?? 0;
 		const range = new vscode.Range(document.positionAt(offset), document.positionAt(offset));
 		const project = this.projectForUri(document.uri);
+		const framework = project ? frameworkLabel(project.framework) : 'Application';
 		if (project && this.activeMode(project)) {
 			return [
 				new vscode.CodeLens(range, {
-					title: '$(debug-stop) Stop Spring Boot',
+					title: `$(debug-stop) Stop ${framework}`,
 					command: 'orbyte.spring.stop',
 					arguments: [document.uri],
 				}),
 				new vscode.CodeLens(range, {
-					title: '$(debug-restart) Restart Spring Boot',
+					title: `$(debug-restart) Restart ${framework}`,
 					command: 'orbyte.spring.restart',
 					arguments: [document.uri],
 				}),
@@ -145,12 +159,12 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 		}
 		return [
 			new vscode.CodeLens(range, {
-				title: '$(run) Run Spring Boot',
+				title: `$(run) Run ${framework}`,
 				command: 'orbyte.spring.run',
 				arguments: [document.uri],
 			}),
 			new vscode.CodeLens(range, {
-				title: '$(debug-alt) Debug Spring Boot',
+				title: `$(debug-alt) Debug ${framework}`,
 				command: 'orbyte.spring.debug',
 				arguments: [document.uri],
 			}),
@@ -194,10 +208,10 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 		this.codeLensChangedEmitter.fire();
 		this.updateStatusBar();
 		if (showResult) {
-			const springProjects = this.projects.filter(project => project.springBoot).length;
+			const frameworks = Array.from(new Set(this.projects.map(project => frameworkLabel(project.framework)))).join(', ');
 			void vscode.window.showInformationMessage(
 				this.projects.length
-					? `Orbyte detected ${this.projects.length} Java project${this.projects.length === 1 ? '' : 's'} (${springProjects} Spring Boot).`
+					? `Orbyte detected ${this.projects.length} Java project${this.projects.length === 1 ? '' : 's'}: ${frameworks}.`
 					: 'No Maven, Gradle, Ant, or Java application project was detected in this workspace.',
 			);
 		}
@@ -212,7 +226,7 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 			this.statusBar.hide();
 			return;
 		}
-		const framework = project.springBoot ? 'Spring Boot' : 'Java';
+		const framework = frameworkLabel(project.framework);
 		if (activeMode) {
 			this.statusBar.text = `$(debug-stop) Stop ${activeMode === 'debug' ? 'Debug' : framework} · ${project.name}`;
 			this.statusBar.tooltip = `${project.name} is ${activeMode === 'debug' ? 'being debugged' : 'running'}\nClick to stop the application`;
@@ -243,7 +257,8 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 			{ label: '$(tools) Build', description: buildToolLabel(project.buildTool), action: 'build' as const },
 			{ label: '$(beaker) Test', description: buildToolLabel(project.buildTool), action: 'test' as const },
 			{ label: '$(coffee) Configure JDK', description: configuredJdkEnvironment(project.root)?.JAVA_HOME ?? 'Select or download a JDK', action: 'jdk' as const },
-		], { title: `${project.name} · ${project.springBoot ? 'Spring Boot' : 'Java'} · ${buildToolLabel(project.buildTool)}` });
+			{ label: '$(settings-gear) Edit Run Configurations…', description: 'Single applications, servers, and compound microservices', action: 'configuration' as const },
+		], { title: `${project.name} · ${frameworkLabel(project.framework)} · ${buildToolLabel(project.buildTool)}` });
 		if (choice) {
 			if (choice.action === 'stop') {
 				await this.stopProject(project);
@@ -251,6 +266,8 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 				await this.restartProject(project);
 			} else if (choice.action === 'jdk') {
 				await vscode.commands.executeCommand('orbyte.java.configureJdk', project.root);
+			} else if (choice.action === 'configuration') {
+				await vscode.commands.executeCommand('orbyte.run.configure', project.root);
 			} else {
 				await this.execute(choice.action, project.root);
 			}
@@ -276,18 +293,47 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 			}
 			return;
 		}
-		if (action === 'debug') {
-			await this.startJava(project, false);
+		if (action === 'run' || action === 'debug') {
+			await this.startProject(project, action, '');
 			return;
 		}
-		if (action === 'run' && project.buildTool === 'java') {
-			await this.startJava(project, true);
+		await vscode.tasks.executeTask(this.createTask(project, action));
+	}
+
+	private async runProjectByPath(projectPath: string, mode: ActiveApplicationMode, programArgs: string): Promise<boolean> {
+		const project = this.projects.find(candidate => normalizePath(candidate.root.fsPath) === normalizePath(projectPath));
+		if (!project) {
+			return false;
+		}
+		await this.startProject(project, mode, programArgs);
+		return true;
+	}
+
+	private async stopProjectByPath(projectPath: string): Promise<boolean> {
+		const project = this.projects.find(candidate => normalizePath(candidate.root.fsPath) === normalizePath(projectPath));
+		if (!project || !this.activeMode(project)) {
+			return false;
+		}
+		await this.stopProject(project);
+		return true;
+	}
+
+	private async startProject(project: IJavaProject, mode: ActiveApplicationMode, programArgs: string): Promise<void> {
+		if (project.enterprise) {
+			await vscode.commands.executeCommand('orbyte.enterprise.runProject', project.root, mode === 'debug');
 			return;
 		}
-		const execution = await vscode.tasks.executeTask(this.createTask(project, action));
-		if (action === 'run') {
-			this.trackTask(execution);
+		if (project.mainClass) {
+			await this.startJava(project, mode === 'run', programArgs);
+			return;
 		}
+		const command = frameworkRunCommand(project, mode === 'debug');
+		if (!command) {
+			void vscode.window.showErrorMessage(`Orbyte detected ${frameworkLabel(project.framework)} in ${project.name}, but could not find a main class or a supported development command.`);
+			return;
+		}
+		const execution = await vscode.tasks.executeTask(this.createRunTask(project, command));
+		this.trackTask(execution);
 	}
 
 	private async stop(uri?: vscode.Uri): Promise<void> {
@@ -420,7 +466,7 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 		this.updateStatusBar();
 	}
 
-	private async startJava(project: IJavaProject, noDebug: boolean): Promise<void> {
+	private async startJava(project: IJavaProject, noDebug: boolean, programArgs = ''): Promise<void> {
 		if (!project.mainClass) {
 			void vscode.window.showErrorMessage(`Orbyte could not find a main class under ${project.name}/src/main.`);
 			return;
@@ -435,26 +481,40 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 			return;
 		}
 		await Promise.all([languageExtension.activate(), debuggerExtension.activate()]);
-		const started = await vscode.debug.startDebugging(project.folder, this.debugConfiguration(project, noDebug));
+		const started = await vscode.debug.startDebugging(project.folder, this.debugConfiguration(project, noDebug, programArgs));
 		if (!started) {
 			void vscode.window.showErrorMessage(`Could not ${noDebug ? 'run' : 'debug'} ${project.mainClass}. Check the Java runtime configured for this workspace.`);
 		}
 	}
 
-	private debugConfiguration(project: IJavaProject, noDebug: boolean): vscode.DebugConfiguration {
+	private debugConfiguration(project: IJavaProject, noDebug: boolean, programArgs = ''): vscode.DebugConfiguration {
 		const jdkEnvironment = configuredJdkEnvironment(project.root);
 		return {
 			type: 'java',
 			request: 'launch',
-			name: `${noDebug ? 'Run' : 'Debug'} ${project.name}`,
+			name: `${noDebug ? 'Run' : 'Debug'} ${project.name} (${frameworkLabel(project.framework)})`,
 			mainClass: project.mainClass,
 			cwd: project.root.fsPath,
 			console: 'integratedTerminal',
 			noDebug,
 			env: jdkEnvironment,
+			args: programArgs,
 			orbyteProject: project.root.fsPath,
 			orbyteMode: noDebug ? 'run' : 'debug',
 		};
+	}
+
+	private createRunTask(project: IJavaProject, command: { executable: string; args: string[] }): vscode.Task {
+		const task = new vscode.Task(
+			{ type: 'orbyte-java', action: 'run', project: project.root.fsPath },
+			project.folder,
+			`Run ${project.name} (${frameworkLabel(project.framework)})`,
+			'Orbyte Applications',
+			new vscode.ShellExecution(command.executable, command.args, { cwd: project.root.fsPath, env: configuredJdkEnvironment(project.root) }),
+			[],
+		);
+		task.presentationOptions = { reveal: vscode.TaskRevealKind.Always, panel: vscode.TaskPanelKind.Dedicated, clear: true };
+		return task;
 	}
 
 	private createTask(project: IJavaProject, action: Exclude<ProjectAction, 'debug'>): vscode.Task {
@@ -496,7 +556,7 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 		}
 		const selection = await vscode.window.showQuickPick(this.projects.map(project => ({
 			label: project.name,
-			description: `${project.springBoot ? 'Spring Boot' : 'Java'} · ${buildToolLabel(project.buildTool)}`,
+			description: `${frameworkLabel(project.framework)} · ${buildToolLabel(project.buildTool)}`,
 			detail: vscode.workspace.asRelativePath(project.root, false),
 			project,
 		})), { title: 'Select the project to run' });
@@ -607,13 +667,16 @@ async function inspectProject(candidate: IProjectCandidate): Promise<IJavaProjec
 	);
 	let mainClass: string | undefined;
 	let mainUri: vscode.Uri | undefined;
-	let springBoot = /spring-boot|org\.springframework\.boot/.test(buildText);
+	let framework = detectFramework(buildText);
+	let enterprise = framework === 'jakarta-ee' || /<packaging>\s*(?:ear|ejb)\s*<\/packaging>/i.test(buildText);
 	for (const sourceFile of sourceFiles) {
 		const text = await readText(sourceFile.fsPath);
 		const isMain = JAVA_MAIN_PATTERN.test(text) || KOTLIN_MAIN_PATTERN.test(text);
-		if (!springBoot && SPRING_MAIN_PATTERN.test(text)) {
-			springBoot = true;
+		const sourceFramework = detectFramework(text);
+		if (framework === 'java' && sourceFramework !== 'java') {
+			framework = sourceFramework;
 		}
+		enterprise ||= /@(Stateless|Stateful|Singleton|MessageDriven|WebServlet|ApplicationPath)\b|\b(?:jakarta|javax)\.(?:ejb|servlet|ws\.rs)\b/.test(text);
 		if (!mainClass && isMain) {
 			mainClass = qualifiedMainClass(text, sourceFile);
 			mainUri = sourceFile;
@@ -621,7 +684,7 @@ async function inspectProject(candidate: IProjectCandidate): Promise<IJavaProjec
 		if (isMain && SPRING_MAIN_PATTERN.test(text)) {
 			mainClass = qualifiedMainClass(text, sourceFile);
 			mainUri = sourceFile;
-			springBoot = true;
+			framework = 'spring-boot';
 			break;
 		}
 	}
@@ -632,12 +695,36 @@ async function inspectProject(candidate: IProjectCandidate): Promise<IJavaProjec
 	return {
 		...candidate,
 		name: await projectName(candidate, buildText),
-		springBoot,
+		framework,
+		enterprise: enterprise || framework === 'jakarta-ee',
+		springBoot: framework === 'spring-boot',
 		springDevtools: /spring-boot-devtools/.test(buildText),
 		mainClass,
 		mainUri,
 		antTargets,
 	};
+}
+
+function detectFramework(text: string): JavaFramework {
+	if (/spring-boot|org\.springframework\.boot|@SpringBootApplication\b|SpringApplication\.run\s*\(|runApplication\s*</i.test(text)) {
+		return 'spring-boot';
+	}
+	if (/io\.quarkus|quarkus-(?:maven-plugin|gradle-plugin)|@QuarkusMain\b/i.test(text)) {
+		return 'quarkus';
+	}
+	if (/io\.micronaut|micronaut-(?:runtime|application|gradle-plugin)|Micronaut\.run\s*\(/i.test(text)) {
+		return 'micronaut';
+	}
+	if (/io\.helidon|helidon-(?:microprofile|webserver)/i.test(text)) {
+		return 'helidon';
+	}
+	if (/io\.vertx|vertx-(?:core|web)/i.test(text)) {
+		return 'vertx';
+	}
+	if (/jakarta\.platform|jakarta\.jakartaee|javax\.javaee|\b(?:jakarta|javax)\.(?:ejb|servlet|ws\.rs)\b|@(Stateless|Stateful|Singleton|MessageDriven)\b/i.test(text)) {
+		return 'jakarta-ee';
+	}
+	return 'java';
 }
 
 async function projectName(candidate: IProjectCandidate, buildText: string): Promise<string> {
@@ -683,18 +770,21 @@ function commandFor(project: IJavaProject, action: Exclude<ProjectAction, 'debug
 	if (project.buildTool === 'maven') {
 		const wrapper = process.platform === 'win32' ? 'mvnw.cmd' : 'mvnw';
 		const wrapperPath = path.join(project.root.fsPath, wrapper);
-		const goal = action === 'run' ? 'spring-boot:run' : action === 'build' ? 'package' : 'test';
+		const goal = action === 'run' ? mavenRunGoal(project) : action === 'build' ? 'package' : 'test';
+		const args = action === 'run' && project.framework === 'java' && project.mainClass
+			? [goal, `-Dexec.mainClass=${project.mainClass}`]
+			: [goal];
 		if (fileExists(wrapperPath)) {
 			return process.platform === 'win32'
-				? { executable: wrapperPath, args: [goal] }
-				: { executable: '/bin/sh', args: [wrapperPath, goal] };
+				? { executable: wrapperPath, args }
+				: { executable: '/bin/sh', args: [wrapperPath, ...args] };
 		}
-		return { executable: process.platform === 'win32' ? 'mvn.cmd' : 'mvn', args: [goal] };
+		return { executable: process.platform === 'win32' ? 'mvn.cmd' : 'mvn', args };
 	}
 	if (project.buildTool === 'gradle') {
 		const wrapper = process.platform === 'win32' ? 'gradlew.bat' : 'gradlew';
 		const wrapperPath = path.join(project.root.fsPath, wrapper);
-		const goal = action === 'run' ? 'bootRun' : action === 'build' ? 'build' : 'test';
+		const goal = action === 'run' ? gradleRunGoal(project) : action === 'build' ? 'build' : 'test';
 		if (fileExists(wrapperPath)) {
 			return process.platform === 'win32'
 				? { executable: wrapperPath, args: [goal] }
@@ -708,6 +798,42 @@ function commandFor(project: IJavaProject, action: Exclude<ProjectAction, 'debug
 		return { executable: process.platform === 'win32' ? 'ant.bat' : 'ant', args: target ? [target] : [] };
 	}
 	return { executable: process.platform === 'win32' ? 'java.exe' : 'java', args: project.mainClass ? [project.mainClass] : [] };
+}
+
+function frameworkRunCommand(project: IJavaProject, debug: boolean): { executable: string; args: string[] } | undefined {
+	if (project.enterprise) {
+		return undefined;
+	}
+	const command = commandFor(project, 'run');
+	if (!debug) {
+		return command;
+	}
+	if (project.framework === 'quarkus') {
+		return { ...command, args: [...command.args, '-Dsuspend'] };
+	}
+	if (project.buildTool === 'gradle' && project.framework === 'micronaut') {
+		return { ...command, args: [...command.args, '--debug-jvm'] };
+	}
+	return command;
+}
+
+function mavenRunGoal(project: IJavaProject): string {
+	if (project.framework === 'spring-boot') {
+		return 'spring-boot:run';
+	}
+	if (project.framework === 'quarkus') {
+		return 'quarkus:dev';
+	}
+	if (project.framework === 'micronaut') {
+		return 'mn:run';
+	}
+	return project.mainClass ? 'org.codehaus.mojo:exec-maven-plugin:3.5.0:java' : 'package';
+}
+
+function gradleRunGoal(project: IJavaProject): string {
+	return project.framework === 'spring-boot' ? 'bootRun'
+		: project.framework === 'quarkus' ? 'quarkusDev'
+			: 'run';
 }
 
 function incrementalCommandFor(project: IJavaProject): { executable: string; args: string[] } {
@@ -778,13 +904,29 @@ function buildToolLabel(tool: BuildTool): string {
 	return tool === 'maven' ? 'Maven' : tool === 'gradle' ? 'Gradle' : tool === 'ant' ? 'Ant' : 'Java';
 }
 
+function frameworkLabel(framework: JavaFramework): string {
+	return framework === 'spring-boot' ? 'Spring Boot'
+		: framework === 'quarkus' ? 'Quarkus'
+			: framework === 'micronaut' ? 'Micronaut'
+				: framework === 'helidon' ? 'Helidon'
+					: framework === 'vertx' ? 'Vert.x'
+						: framework === 'jakarta-ee' ? 'Jakarta EE / EJB'
+							: 'Java';
+}
+
 function actionLabel(action: Exclude<ProjectAction, 'debug'>): string {
 	return action === 'run' ? 'Run' : action === 'build' ? 'Build' : 'Test';
 }
 
 function runDescription(project: IJavaProject): string {
-	return project.buildTool === 'maven' ? 'mvnw spring-boot:run'
-		: project.buildTool === 'gradle' ? 'gradlew bootRun'
+	if (project.enterprise) {
+		return 'Build and deploy to configured application server';
+	}
+	if (project.mainClass) {
+		return `${frameworkLabel(project.framework)} · ${project.mainClass}`;
+	}
+	return project.buildTool === 'maven' ? `mvnw ${mavenRunGoal(project)}`
+		: project.buildTool === 'gradle' ? `gradlew ${gradleRunGoal(project)}`
 			: project.buildTool === 'ant' ? 'Ant run target'
 				: project.mainClass ?? 'Java main class';
 }

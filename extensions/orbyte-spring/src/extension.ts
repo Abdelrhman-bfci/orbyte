@@ -13,6 +13,7 @@ import { registerEnvironmentSetup } from './environmentSetup';
 import { registerJdkRuntime } from './jdkRuntime';
 import { registerProjectRuntime } from './projectRuntime';
 import { registerHotReload } from './hotReload';
+import { registerApplicationRuntime } from './applicationRuntime';
 
 interface IChoice {
 	readonly id: string;
@@ -62,6 +63,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	registerJdkRuntime(context);
 	registerProjectRuntime(context);
 	registerEnterpriseRuntime(context);
+	registerApplicationRuntime(context);
 	registerHotReload(context);
 }
 
