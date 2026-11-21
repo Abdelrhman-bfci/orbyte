@@ -154,7 +154,10 @@ if not defined ORBYTE_PYTHON (
 )
 
 :python_found
-"%ORBYTE_PYTHON%" -c "import sys; raise SystemExit(0 if sys.version_info ^>= (3, 9) else 1)" >nul 2>nul
+rem Avoid shell comparison metacharacters in the Python expression. A caret
+rem escape can reach Python literally and cause a syntax error, which previously
+rem made a valid Python 3.13 installation look too old.
+"%ORBYTE_PYTHON%" -c "import operator, sys; raise SystemExit(not operator.ge(sys.version_info, (3, 9)))" >nul 2>nul
 if errorlevel 1 (
 	echo [Orbyte] Python 3.9 or newer is required, but found %ORBYTE_PYTHON%.
 	exit /b 1
