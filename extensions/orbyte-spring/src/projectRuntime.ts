@@ -78,14 +78,19 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 			vscode.commands.registerCommand('orbyte.spring.test', (uri?: vscode.Uri) => this.execute('test', uri)),
 			vscode.commands.registerCommand('orbyte.spring.refreshProjects', () => this.refresh(true)),
 			vscode.commands.registerCommand('orbyte.spring.showProjectActions', () => this.showProjectActions()),
-			vscode.commands.registerCommand('orbyte.java.listApplications', () => this.projects.map(project => ({
-				id: project.root.fsPath,
-				name: project.name,
-				framework: frameworkLabel(project.framework),
-				language: 'Java',
-				root: project.root.fsPath,
-				enterprise: project.enterprise,
-			}))),
+			vscode.commands.registerCommand('orbyte.java.listApplications', async () => {
+				if (!this.projects.length) {
+					await this.refresh(false);
+				}
+				return this.projects.map(project => ({
+					id: project.root.fsPath,
+					name: project.name,
+					framework: frameworkLabel(project.framework),
+					language: 'Java',
+					root: project.root.fsPath,
+					enterprise: project.enterprise,
+				}));
+			}),
 			vscode.commands.registerCommand('orbyte.java.runApplication', (projectPath: string, mode: ActiveApplicationMode = 'run', programArgs = '') => this.runProjectByPath(projectPath, mode, programArgs)),
 			vscode.commands.registerCommand('orbyte.java.stopApplication', (projectPath: string) => this.stopProjectByPath(projectPath)),
 			vscode.tasks.onDidStartTask(event => this.trackTask(event.execution)),
