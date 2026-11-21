@@ -4,38 +4,72 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { execFile } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, statSync } from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+
+type MemoryMode = 'java' | 'node' | 'none';
+type ConfigurationScope = 'workspace' | 'global';
 
 interface ILanguageEnvironment {
 	readonly id: string;
 	readonly label: string;
-	readonly icon: string;
+	readonly shortLabel: string;
 	readonly languageIds: readonly string[];
 	readonly executables: readonly string[];
+	readonly versions: readonly string[];
+	readonly recommendedVersion: string;
 	readonly selectorCommand?: string;
 	readonly downloadUrl: string;
-	readonly memory: 'java' | 'node' | 'none';
+	readonly memory: MemoryMode;
+}
+
+interface IEnvironmentViewState {
+	readonly selectedId: string;
+	readonly detectedId?: string;
+	readonly platform: string;
+	readonly architecture: string;
+	readonly totalMemoryGb: number;
+	readonly recommendedHeapMb: number;
+	readonly autoDetect: boolean;
+	readonly preferredVersions: Readonly<Record<string, string>>;
+	readonly heapMb: Readonly<Record<string, number>>;
+	readonly runtimePaths: Readonly<Record<string, string>>;
+	readonly detectedPaths: Readonly<Record<string, string>>;
+	readonly detectedVersions: Readonly<Record<string, string>>;
+	readonly javaToolingPath: string;
+	readonly javaToolingMajor?: number;
+	readonly javaToolingReady: boolean;
+	readonly javaProjectPath: string;
+	readonly environments: readonly {
+		readonly id: string;
+		readonly label: string;
+		readonly shortLabel: string;
+		readonly versions: readonly string[];
+		readonly recommendedVersion: string;
+		readonly memorySupported: boolean;
+		readonly hasSelector: boolean;
+	}[];
 }
 
 const environments: readonly ILanguageEnvironment[] = [
-	{ id: 'java', label: 'Java / JVM', icon: 'coffee', languageIds: ['java', 'kotlin', 'groovy'], executables: ['java'], downloadUrl: 'https://adoptium.net/temurin/releases/', memory: 'java' },
-	{ id: 'node', label: 'JavaScript / TypeScript', icon: 'symbol-method', languageIds: ['javascript', 'javascriptreact', 'typescript', 'typescriptreact'], executables: ['node'], downloadUrl: 'https://nodejs.org/en/download', memory: 'node' },
-	{ id: 'python', label: 'Python', icon: 'symbol-method', languageIds: ['python'], executables: ['python3', 'python'], selectorCommand: 'python.setInterpreter', downloadUrl: 'https://www.python.org/downloads/', memory: 'none' },
-	{ id: 'cpp', label: 'C / C++', icon: 'symbol-namespace', languageIds: ['c', 'cpp', 'cuda-cpp'], executables: ['clang', 'gcc', 'cl'], selectorCommand: 'C_Cpp.SelectIntelliSenseConfiguration', downloadUrl: 'https://code.visualstudio.com/docs/cpp/config-mingw', memory: 'none' },
-	{ id: 'dotnet', label: '.NET / C#', icon: 'symbol-class', languageIds: ['csharp', 'fsharp', 'vb'], executables: ['dotnet'], downloadUrl: 'https://dotnet.microsoft.com/download', memory: 'none' },
-	{ id: 'go', label: 'Go', icon: 'symbol-struct', languageIds: ['go'], executables: ['go'], selectorCommand: 'go.locate.tools', downloadUrl: 'https://go.dev/dl/', memory: 'none' },
-	{ id: 'rust', label: 'Rust', icon: 'symbol-struct', languageIds: ['rust'], executables: ['rustc', 'cargo'], downloadUrl: 'https://rustup.rs/', memory: 'none' },
-	{ id: 'php', label: 'PHP', icon: 'symbol-method', languageIds: ['php'], executables: ['php'], downloadUrl: 'https://www.php.net/downloads', memory: 'none' },
-	{ id: 'ruby', label: 'Ruby', icon: 'ruby', languageIds: ['ruby'], executables: ['ruby'], downloadUrl: 'https://www.ruby-lang.org/en/downloads/', memory: 'none' },
+	{ id: 'java', label: 'Java / JVM', shortLabel: 'Java', languageIds: ['java', 'kotlin', 'groovy'], executables: ['java'], versions: ['25', '21', '17', '11', '8'], recommendedVersion: '21', downloadUrl: 'https://adoptium.net/temurin/releases/', memory: 'java' },
+	{ id: 'node', label: 'JavaScript / TypeScript', shortLabel: 'Node.js', languageIds: ['javascript', 'javascriptreact', 'typescript', 'typescriptreact'], executables: ['node'], versions: ['24', '22', '20'], recommendedVersion: '24', downloadUrl: 'https://nodejs.org/en/download', memory: 'node' },
+	{ id: 'python', label: 'Python', shortLabel: 'Python', languageIds: ['python'], executables: ['python3', 'python'], versions: ['3.14', '3.13', '3.12', '3.11', '3.10'], recommendedVersion: '3.13', selectorCommand: 'python.setInterpreter', downloadUrl: 'https://www.python.org/downloads/', memory: 'none' },
+	{ id: 'cpp', label: 'C / C++', shortLabel: 'C/C++', languageIds: ['c', 'cpp', 'cuda-cpp'], executables: ['clang', 'gcc', 'cl'], versions: ['Clang', 'GCC', 'MSVC'], recommendedVersion: 'Clang', selectorCommand: 'C_Cpp.SelectIntelliSenseConfiguration', downloadUrl: 'https://code.visualstudio.com/docs/cpp/config-mingw', memory: 'none' },
+	{ id: 'dotnet', label: '.NET / C#', shortLabel: '.NET', languageIds: ['csharp', 'fsharp', 'vb'], executables: ['dotnet'], versions: ['10', '9', '8'], recommendedVersion: '10', downloadUrl: 'https://dotnet.microsoft.com/download', memory: 'none' },
+	{ id: 'go', label: 'Go', shortLabel: 'Go', languageIds: ['go'], executables: ['go'], versions: ['1.25', '1.24', '1.23'], recommendedVersion: '1.25', selectorCommand: 'go.locate.tools', downloadUrl: 'https://go.dev/dl/', memory: 'none' },
+	{ id: 'rust', label: 'Rust', shortLabel: 'Rust', languageIds: ['rust'], executables: ['rustc', 'cargo'], versions: ['stable', 'beta', 'nightly'], recommendedVersion: 'stable', downloadUrl: 'https://rustup.rs/', memory: 'none' },
+	{ id: 'php', label: 'PHP', shortLabel: 'PHP', languageIds: ['php'], executables: ['php'], versions: ['8.5', '8.4', '8.3', '8.2'], recommendedVersion: '8.4', downloadUrl: 'https://www.php.net/downloads', memory: 'none' },
+	{ id: 'ruby', label: 'Ruby', shortLabel: 'Ruby', languageIds: ['ruby'], executables: ['ruby'], versions: ['3.4', '3.3', '3.2'], recommendedVersion: '3.4', downloadUrl: 'https://www.ruby-lang.org/en/downloads/', memory: 'none' },
 ];
 
 export function registerEnvironmentSetup(context: vscode.ExtensionContext): void {
-	const manager = new EnvironmentSetupManager();
+	const manager = new EnvironmentSetupManager(context);
 	context.subscriptions.push(
 		manager,
-		vscode.commands.registerCommand('orbyte.environment.configure', () => manager.configure()),
+		vscode.commands.registerCommand('orbyte.environment.configure', (languageId?: string) => manager.configure(languageId)),
 	);
 	void manager.start();
 }
@@ -44,16 +78,18 @@ class EnvironmentSetupManager implements vscode.Disposable {
 	private readonly statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 96);
 	private readonly disposables: vscode.Disposable[] = [];
 	private readonly prompted = new Set<string>();
+	private panel: vscode.WebviewPanel | undefined;
 	private updateTimer: NodeJS.Timeout | undefined;
 
-	constructor() {
+	constructor(private readonly context: vscode.ExtensionContext) {
 		this.statusBar.name = 'Language Environment Setup';
 		this.statusBar.command = 'orbyte.environment.configure';
 		this.disposables.push(
 			vscode.window.onDidChangeActiveTextEditor(() => this.scheduleUpdate()),
 			vscode.workspace.onDidChangeConfiguration(event => {
-				if (event.affectsConfiguration('orbyte.environment')) {
+				if (event.affectsConfiguration('orbyte.environment') || event.affectsConfiguration('orbyte.java')) {
 					this.scheduleUpdate();
+					void this.refreshPanel();
 				}
 			}),
 		);
@@ -63,6 +99,7 @@ class EnvironmentSetupManager implements vscode.Disposable {
 		if (this.updateTimer) {
 			clearTimeout(this.updateTimer);
 		}
+		this.panel?.dispose();
 		this.statusBar.dispose();
 		for (const disposable of this.disposables) {
 			disposable.dispose();
@@ -73,116 +110,136 @@ class EnvironmentSetupManager implements vscode.Disposable {
 		await this.update();
 	}
 
+	async configure(requestedLanguageId?: string): Promise<void> {
+		const detected = await detectEnvironment();
+		const requested = environmentByIdOrLanguage(requestedLanguageId);
+		const selected = requested ?? detected ?? environments[0];
+		if (this.panel) {
+			this.panel.reveal(vscode.ViewColumn.Active);
+			await this.refreshPanel(selected.id);
+			return;
+		}
+
+		this.panel = vscode.window.createWebviewPanel(
+			'orbyteEnvironmentSetup',
+			'Orbyte Environment Setup',
+			vscode.ViewColumn.Active,
+			{
+				enableScripts: true,
+				retainContextWhenHidden: true,
+				localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')],
+			},
+		);
+		this.panel.iconPath = vscode.Uri.joinPath(this.context.extensionUri, 'media', 'orbyte-brand.svg');
+		this.panel.webview.html = this.webviewHtml(this.panel.webview);
+		this.panel.onDidDispose(() => this.panel = undefined, undefined, this.disposables);
+		this.panel.webview.onDidReceiveMessage(message => this.handleMessage(message), undefined, this.disposables);
+		await this.refreshPanel(selected.id);
+	}
+
+	private async handleMessage(message: unknown): Promise<void> {
+		if (!message || typeof message !== 'object') {
+			return;
+		}
+		const payload = message as Record<string, unknown>;
+		const languageId = typeof payload.languageId === 'string' ? payload.languageId : undefined;
+		const environment = environmentByIdOrLanguage(languageId);
+		if (payload.type === 'ready') {
+			await this.refreshPanel(languageId);
+			return;
+		}
+		if (!environment) {
+			return;
+		}
+		try {
+			if (payload.type === 'selectLocal') {
+				const role = payload.role === 'languageServer' ? 'languageServer' : 'project';
+				if (environment.id === 'java') {
+					await vscode.commands.executeCommand('orbyte.java.selectJdkInternal', role);
+				} else {
+					await this.selectRuntime(environment, payload.scope === 'workspace' ? 'workspace' : 'global');
+				}
+			} else if (payload.type === 'download') {
+				const version = typeof payload.version === 'string' ? payload.version : environment.recommendedVersion;
+				if (environment.id === 'java') {
+					const role = payload.role === 'languageServer' ? 'languageServer' : 'project';
+					await vscode.commands.executeCommand('orbyte.java.downloadJdkInternal', role, Number(version));
+				} else {
+					await vscode.env.openExternal(vscode.Uri.parse(downloadUrl(environment, version)));
+				}
+			} else if (payload.type === 'apply') {
+				await this.applyForm(environment, payload);
+			} else if (payload.type === 'openSelector' && environment.selectorCommand) {
+				await vscode.commands.executeCommand(environment.selectorCommand);
+			} else if (payload.type === 'openSettings') {
+				await vscode.commands.executeCommand('workbench.action.openSettings', environment.label);
+			} else if (payload.type === 'reload') {
+				await vscode.commands.executeCommand('workbench.action.reloadWindow');
+			}
+		} catch (error) {
+			void vscode.window.showErrorMessage(`Could not update ${environment.label}: ${error instanceof Error ? error.message : String(error)}`);
+		} finally {
+			await this.refreshPanel(environment.id);
+			await this.update();
+		}
+	}
+
+	private async applyForm(environment: ILanguageEnvironment, payload: Record<string, unknown>): Promise<void> {
+		const configuration = vscode.workspace.getConfiguration('orbyte.environment');
+		const target = payload.scope === 'workspace' && vscode.workspace.workspaceFolders?.length
+			? vscode.ConfigurationTarget.Workspace
+			: vscode.ConfigurationTarget.Global;
+		const versions = configuration.get<Record<string, string>>('preferredVersions', {});
+		const version = typeof payload.version === 'string' ? payload.version : environment.recommendedVersion;
+		await configuration.update('preferredVersions', { ...versions, [environment.id]: version }, target);
+		if (typeof payload.autoDetect === 'boolean') {
+			await configuration.update('autoDetect', payload.autoDetect, vscode.ConfigurationTarget.Global);
+		}
+		if (environment.memory !== 'none') {
+			const automatic = payload.heapAuto !== false;
+			const heapMb = automatic ? 0 : Number(payload.heapMb);
+			if (!automatic && (!Number.isFinite(heapMb) || heapMb < 512 || heapMb > 131072)) {
+				throw new Error('Heap memory must be between 512 MB and 131072 MB.');
+			}
+			await applyMemory(environment, heapMb, target);
+		}
+		void vscode.window.showInformationMessage(`${environment.label} environment settings were saved.`);
+	}
+
+	private async selectRuntime(environment: ILanguageEnvironment, scope: ConfigurationScope): Promise<void> {
+		const selection = await vscode.window.showOpenDialog({
+			canSelectFiles: true,
+			canSelectFolders: true,
+			canSelectMany: false,
+			openLabel: `Use for ${environment.label}`,
+			title: `Select the ${environment.label} SDK, runtime, compiler, or executable`,
+		});
+		if (!selection?.[0]) {
+			return;
+		}
+		const executable = resolveExecutable(environment, selection[0].fsPath);
+		if (!executable) {
+			void vscode.window.showErrorMessage(`No ${environment.shortLabel} executable was found under ${selection[0].fsPath}. Select the SDK home, runtime folder, or executable file.`);
+			return;
+		}
+		const target = scope === 'workspace' && vscode.workspace.workspaceFolders?.length ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
+		const configuration = vscode.workspace.getConfiguration('orbyte.environment');
+		const current = configuration.get<Record<string, string>>('runtimePaths', {});
+		await configuration.update('runtimePaths', { ...current, [environment.id]: executable }, target);
+		try {
+			await applyLanguageRuntimeSetting(environment, executable, target);
+		} catch (error) {
+			void vscode.window.showWarningMessage(`The path was saved, but the language extension setting could not be updated: ${error instanceof Error ? error.message : String(error)}`);
+		}
+		await addExecutableToTerminalPath(executable, target);
+		void vscode.window.showInformationMessage(`${environment.label} now uses ${executable}. New terminals will include it on PATH.`);
+	}
+
 	private scheduleUpdate(): void {
 		if (this.updateTimer) {
 			clearTimeout(this.updateTimer);
 		}
 		this.updateTimer = setTimeout(() => void this.update(), 500);
-	}
-
-	async configure(): Promise<void> {
-		const detected = await detectEnvironment();
-		const selected = detected ?? await vscode.window.showQuickPick(environments.map(environment => ({
-			label: `$(${environment.icon}) ${environment.label}`,
-			description: 'Configure runtime, compiler/interpreter, and supported memory settings',
-			environment,
-		})), {
-			title: 'Language Environment Setup',
-			placeHolder: 'Choose a programming language environment',
-		}).then(choice => choice?.environment);
-		if (!selected) {
-			return;
-		}
-		if (selected.id === 'java') {
-			const javaChoice = await vscode.window.showQuickPick([
-				{ label: '$(coffee) SDKs and JDK paths', description: 'Configure JDK 25+ for tooling and a separate project JDK', action: 'runtime' as const },
-				{ label: '$(dashboard) Language-server memory and heap', description: memoryDescription(selected), action: 'memory' as const },
-				{ label: '$(json) Open all Java settings', description: 'Review advanced Java and Spring Boot settings', action: 'settings' as const },
-			], { title: 'Java / JVM Environment', placeHolder: 'Choose what to configure' });
-			if (javaChoice?.action === 'runtime') {
-				await vscode.commands.executeCommand('orbyte.java.configureJdk');
-			} else if (javaChoice?.action === 'memory') {
-				await configureMemory(selected);
-			} else if (javaChoice?.action === 'settings') {
-				await vscode.commands.executeCommand('workbench.action.openSettings', 'Java');
-			}
-			return;
-		}
-
-		const detectedTool = await findExecutable(selected.executables);
-		const runtimePaths = vscode.workspace.getConfiguration('orbyte.environment').get<Record<string, string>>('runtimePaths', {});
-		const configuredPath = runtimePaths[selected.id];
-		const choice = await vscode.window.showQuickPick([
-			{
-				label: `$(terminal) ${selected.label} runtime / toolchain`,
-				description: configuredPath ? `Configured: ${configuredPath}` : detectedTool ? `Detected: ${detectedTool}` : 'Not detected on PATH',
-				action: 'runtime' as const,
-			},
-			...(selected.selectorCommand ? [{
-				label: '$(settings-gear) Open language-specific selector',
-				description: 'Use the installed language extension to choose its interpreter or compiler',
-				action: 'selector' as const,
-			}] : []),
-			...(selected.memory !== 'none' ? [{
-				label: '$(dashboard) Memory and heap',
-				description: memoryDescription(selected),
-				action: 'memory' as const,
-			}] : []),
-			{
-				label: '$(cloud-download) Download / install runtime',
-				description: `Open the official ${selected.label} installation page`,
-				action: 'download' as const,
-			},
-			{
-				label: '$(json) Open all language settings',
-				description: `Search settings for ${selected.label}`,
-				action: 'settings' as const,
-			},
-		], {
-			title: `${selected.label} Environment`,
-			placeHolder: 'Choose what to configure',
-		});
-
-		if (choice?.action === 'runtime') {
-			await this.selectRuntime(selected);
-		} else if (choice?.action === 'selector' && selected.selectorCommand) {
-			try {
-				await vscode.commands.executeCommand(selected.selectorCommand);
-			} catch {
-				void vscode.window.showWarningMessage(`The ${selected.label} language extension is not ready. Install or enable it, then retry.`);
-			}
-		} else if (choice?.action === 'memory') {
-			await configureMemory(selected);
-		} else if (choice?.action === 'download') {
-			await vscode.env.openExternal(vscode.Uri.parse(selected.downloadUrl));
-		} else if (choice?.action === 'settings') {
-			await vscode.commands.executeCommand('workbench.action.openSettings', selected.label);
-		}
-	}
-
-	private async selectRuntime(environment: ILanguageEnvironment): Promise<void> {
-		const selection = await vscode.window.showOpenDialog({
-			canSelectFiles: true,
-			canSelectFolders: false,
-			canSelectMany: false,
-			openLabel: `Use for ${environment.label}`,
-			title: `Select the ${environment.label} executable`,
-		});
-		if (!selection?.[0]) {
-			return;
-		}
-		const executable = selection[0].fsPath;
-		const configuration = vscode.workspace.getConfiguration('orbyte.environment');
-		const current = configuration.get<Record<string, string>>('runtimePaths', {});
-		await configuration.update('runtimePaths', { ...current, [environment.id]: executable }, vscode.ConfigurationTarget.Global);
-		try {
-			await applyLanguageRuntimeSetting(environment, executable);
-		} catch (error) {
-			void vscode.window.showWarningMessage(`The runtime path was saved, but the language-specific setting could not be updated: ${error instanceof Error ? error.message : String(error)}`);
-		}
-		await addExecutableToTerminalPath(executable);
-		void vscode.window.showInformationMessage(`${environment.label} now uses ${executable}. New terminals will include it on PATH.`);
-		await this.update();
 	}
 
 	private async update(): Promise<void> {
@@ -191,38 +248,169 @@ class EnvironmentSetupManager implements vscode.Disposable {
 			this.statusBar.hide();
 			return;
 		}
-		const configured = vscode.workspace.getConfiguration('orbyte.environment').get<Record<string, string>>('runtimePaths', {})[environment.id];
-		const executable = configured && existsSync(configured) ? configured : await findExecutable(environment.executables);
-		this.statusBar.text = executable ? `$(${environment.icon}) ${environment.label}` : `$(warning) Set up ${environment.label}`;
+		const executable = await configuredOrDetectedRuntime(environment);
+		this.statusBar.text = executable ? `$(tools) ${environment.shortLabel}` : `$(warning) Set up ${environment.shortLabel}`;
 		this.statusBar.tooltip = executable
-			? `${environment.label} runtime detected at ${executable}. Click to change runtime and memory settings.`
-			: `${environment.label} runtime was not detected. Click to select or download it.`;
+			? `${environment.label} runtime detected at ${executable}. Click to open the full environment dialog.`
+			: `${environment.label} runtime was not detected. Click to select a local path or download it.`;
 		this.statusBar.backgroundColor = executable ? undefined : new vscode.ThemeColor('statusBarItem.warningBackground');
 		this.statusBar.show();
 
-		if (!executable && vscode.workspace.isTrusted && !this.prompted.has(environment.id)) {
+		const autoDetect = vscode.workspace.getConfiguration('orbyte.environment').get<boolean>('autoDetect', true);
+		if (autoDetect && !executable && vscode.workspace.isTrusted && !this.prompted.has(environment.id)) {
 			this.prompted.add(environment.id);
 			const action = await vscode.window.showWarningMessage(
-				`${environment.label} was detected, but its required runtime or compiler is not available.`,
-				'Configure Environment',
-				'Download',
+				`${environment.label} was detected, but its required SDK, runtime, or compiler is not available.`,
+				'Open Full Setup',
+				'Not Now',
 			);
-			if (action === 'Configure Environment') {
-				await this.configure();
-			} else if (action === 'Download') {
-				await vscode.env.openExternal(vscode.Uri.parse(environment.downloadUrl));
+			if (action === 'Open Full Setup') {
+				await this.configure(environment.id);
 			}
 		}
 	}
+
+	private async refreshPanel(selectedId?: string): Promise<void> {
+		if (!this.panel) {
+			return;
+		}
+		const state = await buildViewState(selectedId);
+		await this.panel.webview.postMessage({ type: 'state', state });
+	}
+
+	private webviewHtml(webview: vscode.Webview): string {
+		const nonce = randomNonce();
+		const media = vscode.Uri.joinPath(this.context.extensionUri, 'media');
+		const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(media, 'environmentSetup.css'));
+		const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(media, 'environmentSetup.js'));
+		const iconUri = webview.asWebviewUri(vscode.Uri.joinPath(media, 'orbyte-brand.svg'));
+		return `<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource}; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
+	<link rel="stylesheet" href="${styleUri}">
+	<title>Orbyte Environment Setup</title>
+</head>
+<body>
+	<div id="app" data-icon="${iconUri}"></div>
+	<script nonce="${nonce}" src="${scriptUri}"></script>
+</body>
+</html>`;
+	}
 }
 
-function activeEnvironment(): ILanguageEnvironment | undefined {
-	const languageId = vscode.window.activeTextEditor?.document.languageId;
-	return environments.find(environment => languageId && environment.languageIds.includes(languageId));
+async function buildViewState(selectedId?: string): Promise<IEnvironmentViewState> {
+	const detected = await detectEnvironment();
+	const configuration = vscode.workspace.getConfiguration('orbyte.environment');
+	const runtimePaths = configuration.get<Record<string, string>>('runtimePaths', {});
+	const detectedPaths: Record<string, string> = {};
+	const detectedVersions: Record<string, string> = {};
+	for (const environment of environments) {
+		const detectedPath = await findExecutable(environment.executables);
+		if (detectedPath) {
+			detectedPaths[environment.id] = detectedPath;
+			detectedVersions[environment.id] = await executableVersion(detectedPath) ?? 'Installed';
+		}
+	}
+	const totalMemoryGb = Math.round(os.totalmem() / 1024 / 1024 / 1024 * 10) / 10;
+	const javaToolingPath = configuredJavaToolingPath();
+	const javaExecutable = javaToolingPath
+		? resolveJavaExecutable(javaToolingPath)
+		: detectedPaths.java;
+	const javaToolingVersion = javaExecutable ? await executableVersion(javaExecutable) : undefined;
+	const javaToolingMajor = javaToolingVersion ? parseJavaMajor(javaToolingVersion) : undefined;
+	return {
+		selectedId: environmentByIdOrLanguage(selectedId)?.id ?? detected?.id ?? 'java',
+		detectedId: detected?.id,
+		platform: process.platform,
+		architecture: process.arch,
+		totalMemoryGb,
+		recommendedHeapMb: recommendedHeapMb(),
+		autoDetect: configuration.get<boolean>('autoDetect', true),
+		preferredVersions: configuration.get<Record<string, string>>('preferredVersions', {}),
+		heapMb: configuration.get<Record<string, number>>('heapMb', {}),
+		runtimePaths,
+		detectedPaths,
+		detectedVersions,
+		javaToolingPath: javaToolingPath || detectedPaths.java || '',
+		javaToolingMajor,
+		javaToolingReady: Boolean(javaToolingMajor && javaToolingMajor >= 25),
+		javaProjectPath: vscode.workspace.getConfiguration('orbyte.java', configurationResource()).get<string>('jdkHome', ''),
+		environments: environments.map(environment => ({
+			id: environment.id,
+			label: environment.label,
+			shortLabel: environment.shortLabel,
+			versions: environment.versions,
+			recommendedVersion: environment.recommendedVersion,
+			memorySupported: environment.memory !== 'none',
+			hasSelector: Boolean(environment.selectorCommand),
+		})),
+	};
+}
+
+function environmentByIdOrLanguage(value?: string): ILanguageEnvironment | undefined {
+	return environments.find(environment => environment.id === value || environment.languageIds.includes(value ?? ''));
+}
+
+function configuredJavaToolingPath(): string {
+	const settings = vscode.workspace.getConfiguration();
+	return vscode.workspace.getConfiguration('orbyte.java').get<string>('languageServerJdkHome', '')
+		|| settings.get<string>('java.jdt.ls.java.home', '')
+		|| settings.get<string>('spring-boot.ls.java.home', '');
+}
+
+function resolveJavaExecutable(homeOrExecutable: string): string | undefined {
+	if (!existsSync(homeOrExecutable)) {
+		return undefined;
+	}
+	try {
+		if (statSync(homeOrExecutable).isFile()) {
+			return homeOrExecutable;
+		}
+	} catch {
+		return undefined;
+	}
+	const executable = path.join(homeOrExecutable, 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
+	return existsSync(executable) ? executable : undefined;
+}
+
+function parseJavaMajor(versionOutput: string): number | undefined {
+	const match = /(?:java|openjdk)(?:\s+version)?\s+"?(?:(1)\.)?(\d+)/i.exec(versionOutput);
+	return match ? Number(match[2]) : undefined;
+}
+
+async function configuredOrDetectedRuntime(environment: ILanguageEnvironment): Promise<string | undefined> {
+	const configured = vscode.workspace.getConfiguration('orbyte.environment').get<Record<string, string>>('runtimePaths', {})[environment.id];
+	return configured && existsSync(configured) ? configured : findExecutable(environment.executables);
+}
+
+function resolveExecutable(environment: ILanguageEnvironment, selectedPath: string): string | undefined {
+	if (!existsSync(selectedPath)) {
+		return undefined;
+	}
+	try {
+		if (statSync(selectedPath).isFile()) {
+			return selectedPath;
+		}
+	} catch {
+		return undefined;
+	}
+	const suffix = process.platform === 'win32' ? '.exe' : '';
+	for (const name of environment.executables) {
+		for (const candidate of [path.join(selectedPath, `${name}${suffix}`), path.join(selectedPath, 'bin', `${name}${suffix}`)]) {
+			if (existsSync(candidate)) {
+				return candidate;
+			}
+		}
+	}
+	return undefined;
 }
 
 async function detectEnvironment(): Promise<ILanguageEnvironment | undefined> {
-	const active = activeEnvironment();
+	const languageId = vscode.window.activeTextEditor?.document.languageId;
+	const active = environmentByIdOrLanguage(languageId);
 	if (active || !vscode.workspace.workspaceFolders?.length) {
 		return active;
 	}
@@ -240,7 +428,7 @@ async function detectEnvironment(): Promise<ILanguageEnvironment | undefined> {
 	const excluded = '**/{node_modules,target,build,out,dist,vendor,.git}/**';
 	for (const [id, include] of signals) {
 		if ((await vscode.workspace.findFiles(include, excluded, 1)).length) {
-			return environments.find(environment => environment.id === id);
+			return environmentByIdOrLanguage(id);
 		}
 	}
 	return undefined;
@@ -249,8 +437,7 @@ async function detectEnvironment(): Promise<ILanguageEnvironment | undefined> {
 async function findExecutable(names: readonly string[]): Promise<string | undefined> {
 	for (const name of names) {
 		try {
-			const command = process.platform === 'win32' ? 'where.exe' : 'which';
-			const output = await run(command, [name]);
+			const output = await run(process.platform === 'win32' ? 'where.exe' : 'which', [name]);
 			const first = output.split(/\r?\n/).map(line => line.trim()).find(Boolean);
 			if (first) {
 				return first;
@@ -262,71 +449,92 @@ async function findExecutable(names: readonly string[]): Promise<string | undefi
 	return undefined;
 }
 
-async function applyLanguageRuntimeSetting(environment: ILanguageEnvironment, executable: string): Promise<void> {
-	const target = vscode.ConfigurationTarget.Global;
+async function executableVersion(executable: string): Promise<string | undefined> {
+	for (const argument of ['--version', '-version']) {
+		try {
+			const output = await run(executable, [argument]);
+			return output.split(/\r?\n/).map(line => line.trim()).find(Boolean)?.slice(0, 90);
+		} catch {
+			// Try the alternative version argument.
+		}
+	}
+	return undefined;
+}
+
+async function applyLanguageRuntimeSetting(environment: ILanguageEnvironment, executable: string, target: vscode.ConfigurationTarget): Promise<void> {
+	const configuration = vscode.workspace.getConfiguration();
 	if (environment.id === 'node') {
-		await vscode.workspace.getConfiguration().update('js/ts.tsserver.node.path', executable, target);
+		await configuration.update('js/ts.tsserver.node.path', executable, target);
 	} else if (environment.id === 'python') {
-		await vscode.workspace.getConfiguration().update('python.defaultInterpreterPath', executable, target);
+		await configuration.update('python.defaultInterpreterPath', executable, target);
 	} else if (environment.id === 'cpp') {
-		await vscode.workspace.getConfiguration().update('C_Cpp.default.compilerPath', executable, target);
+		await configuration.update('C_Cpp.default.compilerPath', executable, target);
 	} else if (environment.id === 'go') {
-		await vscode.workspace.getConfiguration().update('go.goroot', path.dirname(path.dirname(executable)), target);
+		await configuration.update('go.goroot', path.dirname(path.dirname(executable)), target);
 	} else if (environment.id === 'php') {
-		await vscode.workspace.getConfiguration().update('php.validate.executablePath', executable, target);
+		await configuration.update('php.validate.executablePath', executable, target);
 	}
 }
 
-async function addExecutableToTerminalPath(executable: string): Promise<void> {
+async function addExecutableToTerminalPath(executable: string, target: vscode.ConfigurationTarget): Promise<void> {
 	const key = process.platform === 'win32' ? 'terminal.integrated.env.windows' : process.platform === 'darwin' ? 'terminal.integrated.env.osx' : 'terminal.integrated.env.linux';
 	const configuration = vscode.workspace.getConfiguration();
 	const existing = configuration.get<Record<string, string | null>>(key, {});
 	const variable = process.platform === 'win32' ? '${env:Path}' : '${env:PATH}';
 	const separator = process.platform === 'win32' ? ';' : ':';
-	await configuration.update(key, { ...existing, PATH: `${path.dirname(executable)}${separator}${variable}` }, vscode.ConfigurationTarget.Global);
+	await configuration.update(key, { ...existing, PATH: `${path.dirname(executable)}${separator}${variable}` }, target);
 }
 
-function memoryDescription(environment: ILanguageEnvironment): string {
-	const values = vscode.workspace.getConfiguration('orbyte.environment').get<Record<string, number>>('heapMb', {});
-	return values[environment.id] ? `Current maximum: ${values[environment.id]} MB` : 'Auto-sized by default; set a custom maximum when needed';
-}
-
-async function configureMemory(environment: ILanguageEnvironment): Promise<void> {
-	const current = vscode.workspace.getConfiguration('orbyte.environment').get<Record<string, number>>('heapMb', {});
-	const value = await vscode.window.showInputBox({
-		title: `${environment.label} Memory / Heap`,
-		prompt: 'Maximum memory in MB. Use 0 to return to automatic sizing.',
-		value: String(current[environment.id] ?? (environment.memory === 'java' ? 2048 : 4096)),
-		validateInput: input => /^\d+$/.test(input) && Number(input) >= 0 && Number(input) <= 131072 ? undefined : 'Enter a value from 0 to 131072 MB.',
-	});
-	if (value === undefined) {
-		return;
-	}
-	const heapMb = Number(value);
+async function applyMemory(environment: ILanguageEnvironment, heapMb: number, target: vscode.ConfigurationTarget): Promise<void> {
 	const configuration = vscode.workspace.getConfiguration('orbyte.environment');
+	const current = configuration.get<Record<string, number>>('heapMb', {});
 	const next = { ...current };
 	if (heapMb === 0) {
 		delete next[environment.id];
 	} else {
 		next[environment.id] = heapMb;
 	}
-	await configuration.update('heapMb', next, vscode.ConfigurationTarget.Global);
-
+	await configuration.update('heapMb', next, target);
+	const settings = vscode.workspace.getConfiguration();
 	if (environment.memory === 'node') {
-		await vscode.workspace.getConfiguration().update('js/ts.tsserver.maxMemory', heapMb || undefined, vscode.ConfigurationTarget.Global);
+		await settings.update('js/ts.tsserver.maxMemory', heapMb || undefined, target);
 	} else if (environment.memory === 'java') {
-		const settings = vscode.workspace.getConfiguration();
-		const currentVmArgs = settings.get<string>('java.jdt.ls.vmargs', '');
-		await settings.update('java.jdt.ls.vmargs', replaceMemoryArg(currentVmArgs, heapMb), vscode.ConfigurationTarget.Global);
-		const springArgs = settings.get<string>('spring-boot.ls.vmargs', '');
-		await settings.update('spring-boot.ls.vmargs', replaceMemoryArg(springArgs, heapMb), vscode.ConfigurationTarget.Global);
+		await settings.update('java.jdt.ls.vmargs', replaceMemoryArg(settings.get<string>('java.jdt.ls.vmargs', ''), heapMb), target);
+		await settings.update('spring-boot.ls.java.vmargs', replaceMemoryArg(settings.get<string>('spring-boot.ls.java.vmargs', ''), heapMb), target);
 	}
-	void vscode.window.showInformationMessage(heapMb ? `${environment.label} maximum memory set to ${heapMb} MB.` : `${environment.label} memory returned to automatic sizing.`);
 }
 
 function replaceMemoryArg(argumentsValue: string, heapMb: number): string {
 	const withoutMaximum = argumentsValue.replace(/(?:^|\s)-Xmx\d+[kKmMgG]?\b/g, '').replace(/\s+/g, ' ').trim();
 	return heapMb ? `${withoutMaximum}${withoutMaximum ? ' ' : ''}-Xmx${heapMb}m` : withoutMaximum;
+}
+
+function recommendedHeapMb(): number {
+	const totalMb = Math.floor(os.totalmem() / 1024 / 1024);
+	return Math.min(16384, Math.max(1024, Math.floor(totalMb * 0.25 / 256) * 256));
+}
+
+function downloadUrl(environment: ILanguageEnvironment, version: string): string {
+	if (environment.id === 'node') {
+		return `https://nodejs.org/dist/latest-v${encodeURIComponent(version)}.x/`;
+	}
+	if (environment.id === 'python') {
+		return `https://www.python.org/downloads/?version=${encodeURIComponent(version)}`;
+	}
+	if (environment.id === 'dotnet') {
+		return `https://dotnet.microsoft.com/download/dotnet/${encodeURIComponent(version)}.0`;
+	}
+	return environment.downloadUrl;
+}
+
+function configurationResource(): vscode.Uri | undefined {
+	const active = vscode.window.activeTextEditor?.document.uri;
+	return active && vscode.workspace.getWorkspaceFolder(active) ? active : vscode.workspace.workspaceFolders?.[0]?.uri;
+}
+
+function randomNonce(): string {
+	const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+	return Array.from({ length: 32 }, () => alphabet.charAt(Math.floor(Math.random() * alphabet.length))).join('');
 }
 
 function run(command: string, args: string[]): Promise<string> {
@@ -336,7 +544,7 @@ function run(command: string, args: string[]): Promise<string> {
 				reject(new Error((stderr || stdout || error.message).trim()));
 				return;
 			}
-			resolve(stdout);
+			resolve(`${stdout}\n${stderr}`);
 		});
 	});
 }

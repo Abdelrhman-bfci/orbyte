@@ -19,12 +19,14 @@ const requiredLocalAssets = [
 	'resources/server/code-192.png',
 	'resources/server/code-512.png',
 	'src/vs/workbench/browser/media/orbyte-brand.svg',
+	'extensions/orbyte-spring/media/orbyte-brand.svg',
 ];
 
 const brandSurfaces = [
 	'src/vs/workbench/browser/orbyteBrand.ts',
 	'src/vs/workbench/contrib/localAI/browser/localAI.contribution.ts',
 	'src/vs/workbench/contrib/welcomeGettingStarted/browser/orbyteTaskDashboard.ts',
+	'extensions/orbyte-spring/src/environmentSetup.ts',
 ];
 
 const errors = [];

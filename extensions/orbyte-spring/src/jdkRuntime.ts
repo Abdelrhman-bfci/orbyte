@@ -26,7 +26,9 @@ export function registerJdkRuntime(context: vscode.ExtensionContext): void {
 	const manager = new JdkRuntimeManager();
 	context.subscriptions.push(
 		manager,
-		vscode.commands.registerCommand('orbyte.java.configureJdk', (resource?: vscode.Uri) => manager.configure(resource)),
+		vscode.commands.registerCommand('orbyte.java.configureJdk', () => vscode.commands.executeCommand('orbyte.environment.configure', 'java')),
+		vscode.commands.registerCommand('orbyte.java.selectJdkInternal', (role: JdkRole, resource?: vscode.Uri) => manager.selectLocalJdk(role, resource)),
+		vscode.commands.registerCommand('orbyte.java.downloadJdkInternal', (role: JdkRole, version: number, resource?: vscode.Uri) => manager.downloadJdk(role, version, resource)),
 	);
 	void manager.start();
 }
@@ -88,16 +90,11 @@ class JdkRuntimeManager implements vscode.Disposable {
 
 		const action = await vscode.window.showWarningMessage(
 			`Java tooling requires JDK ${LANGUAGE_SERVER_JDK_VERSION} or newer. Your project can still use JDK 8, 11, 17, 21, or another compatible version.`,
-			'Open Java Setup',
-			`Download JDK ${LANGUAGE_SERVER_JDK_VERSION}`,
-			'Select Installed JDK',
+			'Open Full Setup',
+			'Not Now',
 		);
-		if (action === 'Open Java Setup') {
-			await this.configure();
-		} else if (action === `Download JDK ${LANGUAGE_SERVER_JDK_VERSION}`) {
-			await this.downloadJdk('languageServer', LANGUAGE_SERVER_JDK_VERSION);
-		} else if (action === 'Select Installed JDK') {
-			await this.selectLocalJdk('languageServer');
+		if (action === 'Open Full Setup') {
+			await vscode.commands.executeCommand('orbyte.environment.configure', 'java');
 		}
 	}
 
@@ -168,7 +165,7 @@ class JdkRuntimeManager implements vscode.Disposable {
 		}
 	}
 
-	private async selectLocalJdk(role: JdkRole, resource = configurationResource()): Promise<void> {
+	async selectLocalJdk(role: JdkRole, resource = configurationResource()): Promise<void> {
 		const selection = await vscode.window.showOpenDialog({
 			canSelectFiles: false,
 			canSelectFolders: true,
@@ -189,7 +186,7 @@ class JdkRuntimeManager implements vscode.Disposable {
 		await this.useJdk(role, home, resource);
 	}
 
-	private async downloadJdk(role: JdkRole, version: number, resource = configurationResource()): Promise<void> {
+	async downloadJdk(role: JdkRole, version: number, resource = configurationResource()): Promise<void> {
 		if (process.platform !== 'win32') {
 			await vscode.env.openExternal(vscode.Uri.parse(`https://adoptium.net/temurin/releases/?version=${version}`));
 			void vscode.window.showInformationMessage('After installing the JDK, open “Orbyte: Java SDK Setup” and select its installation directory.');

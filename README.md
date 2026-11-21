@@ -130,8 +130,11 @@ separately, then offers to reload the window when the tooling JDK changes.
 The **Environment Setup** button in the main title bar detects the active
 programming language and opens the relevant setup flow for Java/JVM,
 JavaScript/TypeScript, Python, C/C++, .NET, Go, Rust, PHP, or Ruby. It can select
-an SDK, runtime, interpreter, or compiler; open the official installer; and
-configure supported language-server heap limits. A matching setup button also
+an SDK/runtime version from a dropdown, select a local SDK home or executable,
+open the matching official installer, choose project or machine scope, control
+automatic requirement detection, and configure supported language-server heap
+limits. All options are shown in one unified dialog instead of a sequence of
+pickers. A matching setup button also
 appears in the editor title, and missing required tools produce a direct setup
 prompt instead of a generic activation failure. The **Orbyte Home** button next
 to it reopens the Welcome workspace dashboard at any time.
