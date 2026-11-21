@@ -54,6 +54,11 @@ registerAction2(class extends Action2 {
 					group: 'navigation',
 					order: 0.25,
 				},
+				{
+					id: MenuId.TitleBar,
+					group: '0_leading',
+					order: 0,
+				},
 			],
 			metadata: {
 				description: localize2('minWelcomeDescription', 'Opens the Orbyte workspace home and task dashboard.')
