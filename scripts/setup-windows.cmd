@@ -83,6 +83,9 @@ if errorlevel 1 exit /b 1
 call :ensure_cpp_build_tools
 if errorlevel 1 exit /b 1
 
+call :ensure_llama_runtime
+if errorlevel 1 exit /b 1
+
 set "NODE_OPTIONS=--max-old-space-size=8192"
 rem A machine-wide production setting makes pnpm omit build tools such as
 rem npm-run-all2. Orbyte is a source checkout, so its devDependencies are required.
@@ -117,6 +120,21 @@ if errorlevel 1 exit /b 1
 echo [Orbyte] Setup complete with Node.js %ORBYTE_ACTIVE_NODE% and pnpm %ORBYTE_ACTIVE_PNPM%.
 echo [Orbyte] Run: pnpm run compile
 echo [Orbyte] Then: pnpm run orbyte:run:windows
+exit /b 0
+
+:ensure_llama_runtime
+set "ORBYTE_RUNTIME_ARCH=x64"
+if /i "%PROCESSOR_ARCHITECTURE%"=="ARM64" set "ORBYTE_RUNTIME_ARCH=arm64"
+if exist "resources\local-llm\win32-%ORBYTE_RUNTIME_ARCH%\llama-server.exe" (
+	echo [Orbyte] Windows local AI runtime is installed.
+	exit /b 0
+)
+echo [Orbyte] Installing the Windows local AI runtime without model files...
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "scripts\download-llama-windows-runtime.ps1" -Architecture %ORBYTE_RUNTIME_ARCH%
+if errorlevel 1 (
+	echo [Orbyte] Could not install the Windows local AI runtime.
+	exit /b 1
+)
 exit /b 0
 
 :ensure_python

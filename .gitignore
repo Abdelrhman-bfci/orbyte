@@ -69,6 +69,8 @@ dist
 /resources/local-llm/**/*.dll
 /resources/local-llm/**/*.so
 /resources/local-llm/**/*.so.*
+/resources/local-llm/**/LICENSE-LLVM-OpenMP
+/resources/local-llm/**/llama.cpp-LICENSE
 
 # Local AI UI validation screenshots
 /screenshots/

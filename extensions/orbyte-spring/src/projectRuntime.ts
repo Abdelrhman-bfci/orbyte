@@ -6,6 +6,7 @@
 import { existsSync, promises as fs } from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { configuredJdkEnvironment } from './jdkRuntime';
 
 type BuildTool = 'maven' | 'gradle' | 'ant' | 'java';
 type ProjectAction = 'run' | 'debug' | 'build' | 'test';
@@ -239,12 +240,15 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 			]),
 			{ label: '$(tools) Build', description: buildToolLabel(project.buildTool), action: 'build' as const },
 			{ label: '$(beaker) Test', description: buildToolLabel(project.buildTool), action: 'test' as const },
+			{ label: '$(coffee) Configure JDK', description: configuredJdkEnvironment(project.root)?.JAVA_HOME ?? 'Select or download a JDK', action: 'jdk' as const },
 		], { title: `${project.name} · ${project.springBoot ? 'Spring Boot' : 'Java'} · ${buildToolLabel(project.buildTool)}` });
 		if (choice) {
 			if (choice.action === 'stop') {
 				await this.stopProject(project);
 			} else if (choice.action === 'restart') {
 				await this.restartProject(project);
+			} else if (choice.action === 'jdk') {
+				await vscode.commands.executeCommand('orbyte.java.configureJdk', project.root);
 			} else {
 				await this.execute(choice.action, project.root);
 			}
@@ -405,6 +409,7 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 	}
 
 	private debugConfiguration(project: IJavaProject, noDebug: boolean): vscode.DebugConfiguration {
+		const jdkEnvironment = configuredJdkEnvironment(project.root);
 		return {
 			type: 'java',
 			request: 'launch',
@@ -413,6 +418,7 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 			cwd: project.root.fsPath,
 			console: 'integratedTerminal',
 			noDebug,
+			env: jdkEnvironment,
 			orbyteProject: project.root.fsPath,
 			orbyteMode: noDebug ? 'run' : 'debug',
 		};
@@ -420,12 +426,13 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 
 	private createTask(project: IJavaProject, action: Exclude<ProjectAction, 'debug'>): vscode.Task {
 		const command = commandFor(project, action);
+		const jdkEnvironment = configuredJdkEnvironment(project.root);
 		const task = new vscode.Task(
 			{ type: 'orbyte-java', action, project: project.root.fsPath },
 			project.folder,
 			`${actionLabel(action)} ${project.name}`,
 			'Orbyte Java',
-			new vscode.ShellExecution(command.executable, command.args, { cwd: project.root.fsPath }),
+			new vscode.ShellExecution(command.executable, command.args, { cwd: project.root.fsPath, env: jdkEnvironment }),
 			[],
 		);
 		if (action === 'build') {

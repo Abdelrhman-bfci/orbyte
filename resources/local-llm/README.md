@@ -16,4 +16,12 @@ resources/local-llm/
 
 Only the directory matching the target `platform-arch` is copied into a packaged application. The executable must retain its executable bit on macOS and Linux.
 
+Prepare a verified Windows runtime without downloading a model:
+
+```powershell
+pnpm run orbyte:runtime:windows:x64
+```
+
+Windows source setup and production build commands run this step automatically when `llama-server.exe` is missing.
+
 The development resources can contain local model files for testing, but the packaging task never copies them. Runtime and downloaded-model licenses must be presented with their respective artifacts.

@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const [targetPlatform, arch, packageKind = 'app'] = process.argv.slice(2);
@@ -25,6 +27,24 @@ if (process.platform !== targetPlatform) {
 
 if (process.arch !== arch) {
 	console.warn(`[Orbyte] Building ${arch} on a ${process.arch} host. Native dependencies may require a matching ${arch} runner.`);
+}
+
+if (targetPlatform === 'win32') {
+	const runtime = path.join(import.meta.dirname, '..', 'resources', 'local-llm', `win32-${arch}`, 'llama-server.exe');
+	if (!existsSync(runtime)) {
+		console.log(`[Orbyte] Preparing the Windows ${arch} local AI runtime (models remain excluded)...`);
+		const runtimeSetup = spawnSync('powershell.exe', [
+			'-NoLogo',
+			'-NoProfile',
+			'-ExecutionPolicy', 'Bypass',
+			'-File', path.join(import.meta.dirname, 'download-llama-windows-runtime.ps1'),
+			'-Architecture', arch,
+		], { stdio: 'inherit' });
+		if (runtimeSetup.error || runtimeSetup.status !== 0 || !existsSync(runtime)) {
+			console.error('[Orbyte] Could not prepare llama-server.exe for the Windows package.');
+			process.exit(runtimeSetup.status || 1);
+		}
+	}
 }
 
 const task = `vscode-${targetPlatform}-${arch}${packageKind === 'user-setup' ? '-user-setup' : ''}`;

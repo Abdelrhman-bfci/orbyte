@@ -38,6 +38,8 @@
     "orbyte:build:linux:arm64": "node scripts/orbyte-build.mjs linux arm64",
     "orbyte:runtime:linux:x64": "bash scripts/download-llama-linux-runtime.sh x64",
     "orbyte:runtime:linux:arm64": "bash scripts/download-llama-linux-runtime.sh arm64",
+    "orbyte:runtime:windows:x64": "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/download-llama-windows-runtime.ps1 -Architecture x64",
+    "orbyte:runtime:windows:arm64": "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/download-llama-windows-runtime.ps1 -Architecture arm64",
     "orbyte:build:linux:x64:docker": "bash scripts/build-linux-on-macos.sh x64",
     "orbyte:build:linux:arm64:docker": "bash scripts/build-linux-on-macos.sh arm64",
     "orbyte:build:windows:x64": "node scripts/orbyte-build.mjs win32 x64",

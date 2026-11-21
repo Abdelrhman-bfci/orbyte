@@ -64,7 +64,9 @@ The setup script installs `fnm` with WinGet when necessary, activates Node.js
 24.22.1, installs pnpm 12.16.0, installs and configures Python 3.13 for
 `node-gyp`, checks for the Visual Studio C++ toolchain, and installs the stable
 Visual Studio Build Tools with the **Desktop development with C++** workload
-and recommended Windows SDK when they are missing. Accept the Windows
+and recommended Windows SDK when they are missing. It also downloads the
+matching `llama-server.exe` runtime and DLLs after SHA-256 verification; no
+GGUF model is added to the source tree or packaged application. Accept the Windows
 elevation prompt when it appears. The script then installs all repository
 dependencies and stops on the first failed prerequisite. If WinGet has just
 installed a tool but Windows has not refreshed `PATH`, close Command Prompt,
@@ -116,7 +118,13 @@ Orbyte bundles Java language support, the Java debugger, Maven, Gradle, and Spri
 - Ant projects from `build.xml`, including common run, build, and test targets.
 - Nested projects in multi-root workspaces.
 
-Install a JDK supported by the project, then open its folder. The Spring Boot main class shows **Run Spring Boot** and **Debug Spring Boot** actions above the class. The editor title and Explorer context menu also provide Run, Debug, Build, and Test. Debug launches the Java debugger with breakpoints, stepping, variables, watches, and the debug console; it does not require a hand-written `launch.json`.
+Open a Java project and Orbyte checks for a complete JDK automatically. If one
+is missing, choose an existing JDK directory or let Orbyte install Eclipse
+Temurin JDK 21 with WinGet on Windows. You can change it later with
+**Orbyte: Configure Project JDK**; the selected JDK is applied to build, run,
+test, and debug actions for that workspace.
+
+The Spring Boot main class shows **Run Spring Boot** and **Debug Spring Boot** actions above the class. The editor title and Explorer context menu also provide Run, Debug, Build, and Test. Debug launches the Java debugger with breakpoints, stepping, variables, watches, and the debug console; it does not require a hand-written `launch.json`.
 
 Use **Orbyte: Show Java Project Actions** from the Command Palette or click the `Spring Boot · Maven/Gradle/Ant` status item to choose an action. Use **Orbyte: Refresh Java Project Detection** after changing the project layout if automatic refresh has not completed yet.
 
