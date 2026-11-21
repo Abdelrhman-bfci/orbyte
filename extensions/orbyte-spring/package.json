@@ -73,7 +73,12 @@
         { "command": "orbyte.hotReload.disable", "when": "resourceScheme == file && orbyte.hotReload.enabled", "group": "navigation@0" },
         { "command": "orbyte.hotReload.enable", "when": "resourceScheme == file && !orbyte.hotReload.enabled", "group": "navigation@0" },
         { "command": "orbyte.environment.configure", "when": "resourceLangId == javascript || resourceLangId == javascriptreact || resourceLangId == typescript || resourceLangId == typescriptreact || resourceLangId == python || resourceLangId == c || resourceLangId == cpp || resourceLangId == csharp || resourceLangId == fsharp || resourceLangId == go || resourceLangId == rust || resourceLangId == php || resourceLangId == ruby", "group": "navigation@0" },
-        { "command": "orbyte.java.configureJdk", "when": "resourceLangId == java || resourceLangId == kotlin || resourceLangId == groovy", "group": "navigation@0" }
+        { "command": "orbyte.java.configureJdk", "when": "resourceLangId == java || resourceLangId == kotlin || resourceLangId == groovy", "group": "navigation@0" },
+        { "command": "orbyte.run.select", "when": "resourceScheme == file && orbyte.run.applicationDetected", "group": "navigation@1" },
+        { "command": "orbyte.run.configure", "when": "resourceScheme == file && orbyte.run.applicationDetected", "group": "navigation@2" },
+        { "command": "orbyte.run.runSelected", "when": "resourceScheme == file && orbyte.run.applicationDetected", "group": "navigation@3" },
+        { "command": "orbyte.run.debugSelected", "when": "resourceScheme == file && orbyte.run.applicationDetected", "group": "navigation@4" },
+        { "command": "orbyte.run.stopSelected", "when": "resourceScheme == file && orbyte.run.applicationDetected", "group": "navigation@5" }
       ],
       "titleBar": [
         { "command": "orbyte.run.select", "when": "orbyte.run.applicationDetected", "group": "navigation@1" },

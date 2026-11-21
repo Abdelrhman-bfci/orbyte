@@ -347,7 +347,11 @@ class ApplicationRuntime implements vscode.Disposable {
 
 	private async stopSelected(): Promise<void> {
 		const configuration = this.selectedConfiguration();
-		const ids = configuration?.applications ?? Array.from(new Set([...this.runningTasks.keys(), ...this.debugSessions.keys()]));
+		const ids = Array.from(new Set([
+			...(configuration?.applications ?? []),
+			...this.runningTasks.keys(),
+			...this.debugSessions.keys(),
+		]));
 		for (const id of ids) {
 			const application = this.applicationById(id);
 			if (application?.language === 'Java') {
@@ -383,7 +387,9 @@ class ApplicationRuntime implements vscode.Disposable {
 	}
 
 	private trackDebug(session: vscode.DebugSession): void {
-		const id = session.configuration.orbyteApplicationId ?? session.configuration.orbyteProject;
+		const id = session.configuration.orbyteApplicationId
+			?? session.configuration.orbyteProject
+			?? this.applicationForDebugSession(session)?.id;
 		if (typeof id === 'string') {
 			this.debugSessions.set(normalizePath(id), session);
 			this.updateStatusBar();
@@ -411,6 +417,25 @@ class ApplicationRuntime implements vscode.Disposable {
 
 	private applicationById(id: string): IApplicationDescriptor | undefined {
 		return this.applications.find(application => normalizePath(application.id) === normalizePath(id));
+	}
+
+	private applicationForDebugSession(session: vscode.DebugSession): IApplicationDescriptor | undefined {
+		const cwd = typeof session.configuration.cwd === 'string' ? session.configuration.cwd : undefined;
+		if (cwd) {
+			const contextual = this.applications
+				.filter(application => isWithin(cwd, application.root))
+				.sort((left, right) => Number(languageMatchesDebugType(right, session.type)) - Number(languageMatchesDebugType(left, session.type)) || right.root.length - left.root.length)[0];
+			if (contextual) {
+				return contextual;
+			}
+		}
+		const workspaceRoot = session.workspaceFolder?.uri.fsPath;
+		if (!workspaceRoot) {
+			return undefined;
+		}
+		return this.applications
+			.filter(application => isWithin(application.root, workspaceRoot))
+			.sort((left, right) => Number(languageMatchesDebugType(right, session.type)) - Number(languageMatchesDebugType(left, session.type)) || right.root.length - left.root.length)[0];
 	}
 
 	private describeConfiguration(configuration: IRunConfiguration): string {
@@ -662,5 +687,19 @@ function languageMatchesResource(application: IApplicationDescriptor, resource: 
 	if (extension === '.rb') { return application.language === 'Ruby'; }
 	if (['.c', '.cc', '.cpp', '.cxx', '.h', '.hpp'].includes(extension)) { return application.language === 'C / C++'; }
 	if (['.java', '.kt', '.kts', '.groovy'].includes(extension)) { return application.language === 'Java'; }
+	return false;
+}
+
+function languageMatchesDebugType(application: IApplicationDescriptor, debugType: string): boolean {
+	const normalized = debugType.toLowerCase();
+	if (normalized === 'java') { return application.language === 'Java'; }
+	if (normalized === 'python' || normalized === 'debugpy') { return application.language === 'Python'; }
+	if (normalized.includes('node') || normalized.includes('chrome') || normalized.includes('pwa')) { return application.language === 'JavaScript / TypeScript'; }
+	if (normalized === 'php') { return application.language === 'PHP'; }
+	if (normalized === 'coreclr' || normalized === 'dotnet' || normalized === 'clr') { return application.language === 'C# / .NET'; }
+	if (normalized === 'go') { return application.language === 'Go'; }
+	if (normalized === 'lldb' || normalized === 'rust') { return application.language === 'Rust'; }
+	if (normalized === 'rdbg' || normalized === 'ruby') { return application.language === 'Ruby'; }
+	if (normalized === 'cppdbg' || normalized === 'cppvsdbg') { return application.language === 'C / C++'; }
 	return false;
 }
