@@ -231,11 +231,11 @@ if defined ORBYTE_VS_SPECTRE_PATH (
 )
 
 set "ORBYTE_VS_INSTALLER=%ORBYTE_VS_INSTALLER_DIR%\setup.exe"
-if not exist "%ORBYTE_VS_INSTALLER%" (
-	echo [Orbyte] Visual Studio Installer was not found at %ORBYTE_VS_INSTALLER%.
-	exit /b 1
-)
+if exist "%ORBYTE_VS_INSTALLER%" goto vs_installer_ready
+echo [Orbyte] Visual Studio Installer was not found at %ORBYTE_VS_INSTALLER%.
+exit /b 1
 
+:vs_installer_ready
 echo [Orbyte] Installing C++ Spectre-mitigated libraries for x64/x86...
 echo [Orbyte] Accept the Windows elevation prompt. This can take several minutes.
 "%ORBYTE_VS_INSTALLER%" modify --installPath "%ORBYTE_VS_INSTALL_PATH%" --add Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre --passive --norestart --wait
@@ -261,11 +261,13 @@ if defined vs2026_install if exist "%vs2026_install%\VC\Tools\MSVC\*" exit /b 0
 if defined vs2022_install if exist "%vs2022_install%\VC\Tools\MSVC\*" exit /b 0
 if defined vs2019_install if exist "%vs2019_install%\VC\Tools\MSVC\*" exit /b 0
 
-for %%y in (18 2022 2019) do (
-	for %%e in (BuildTools Community Professional Enterprise Preview IntPreview) do (
-		if exist "%ProgramFiles%\Microsoft Visual Studio\%%y\%%e\VC\Tools\MSVC\*" exit /b 0
-		if exist "%ProgramFiles(x86)%\Microsoft Visual Studio\%%y\%%e\VC\Tools\MSVC\*" exit /b 0
-	)
-)
+rem Do not expand ProgramFiles(x86) inside a parenthesized FOR block. CMD treats
+rem the directory's closing parenthesis as syntax even when the path is quoted.
+set "ORBYTE_VS_INSTALLER_DIR=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer"
+if not exist "%ORBYTE_VS_INSTALLER_DIR%\vswhere.exe" exit /b 1
+set "PATH=%ORBYTE_VS_INSTALLER_DIR%;%PATH%"
+set "ORBYTE_VS_CPP_PATH="
+for /f "delims=" %%i in ('vswhere.exe -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath') do set "ORBYTE_VS_CPP_PATH=%%i"
+if defined ORBYTE_VS_CPP_PATH exit /b 0
 exit /b 1
 
