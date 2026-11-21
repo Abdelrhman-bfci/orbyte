@@ -22,6 +22,15 @@ const dependencyInputs = [
 	path.join(repositoryRoot, '.pnpmfile.mjs'),
 ];
 
+const iconCheck = spawnSync(process.execPath, [path.join(repositoryRoot, 'scripts', 'verify-orbyte-icons.mjs')], {
+	cwd: repositoryRoot,
+	stdio: 'inherit',
+});
+if (iconCheck.error || iconCheck.status !== 0) {
+	console.error('[Orbyte] Local application icon verification failed.');
+	process.exit(iconCheck.status || 1);
+}
+
 function dependenciesAreReady() {
 	if (!criticalDependencies.every(dependency => existsSync(dependency))) {
 		return false;

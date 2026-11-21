@@ -8,7 +8,6 @@ import './inlineEditController.js';
 import * as dom from '../../../../base/browser/dom.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { Disposable, DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
-import { FileAccess } from '../../../../base/common/network.js';
 import Severity from '../../../../base/common/severity.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { localize, localize2 } from '../../../../nls.js';
@@ -23,6 +22,7 @@ import { Registry } from '../../../../platform/registry/common/platform.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js';
 import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContainer.js';
+import { orbyteBrandIconSrc } from '../../../browser/orbyteBrand.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainerLocation } from '../../../common/views.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
@@ -463,7 +463,7 @@ class LocalAIFloatingChatService extends Disposable implements ILocalAIFloatingC
 		const image = dom.$<HTMLImageElement>(`img.${className}`);
 		image.alt = '';
 		image.draggable = false;
-		image.src = FileAccess.asBrowserUri('vs/workbench/contrib/localAI/browser/media/orbyte-chat.svg').toString(true);
+		image.src = orbyteBrandIconSrc;
 		return image;
 	}
 }

@@ -9,7 +9,6 @@ import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { getErrorMessage } from '../../../../base/common/errors.js';
 import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
-import { FileAccess } from '../../../../base/common/network.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
@@ -21,6 +20,7 @@ import { asJson, IRequestService } from '../../../../platform/request/common/req
 import { ISecretStorageService } from '../../../../platform/secrets/common/secrets.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+import { orbyteBrandIconSrc } from '../../../browser/orbyteBrand.js';
 
 export type OrbyteTaskProvider = 'jira' | 'azure';
 export type OrbyteTaskState = 'open' | 'in-progress' | 'blocked' | 'done';
@@ -353,7 +353,7 @@ export class OrbyteTaskDashboard extends Disposable {
 			$('.orbyte-dashboard-heading', {},
 				$('.orbyte-dashboard-brand', {},
 					$('img.orbyte-dashboard-brand-icon', {
-						src: FileAccess.asBrowserUri('vs/workbench/contrib/localAI/browser/media/orbyte-chat.svg').toString(true),
+						src: orbyteBrandIconSrc,
 						alt: '',
 						draggable: 'false',
 						'aria-hidden': 'true',

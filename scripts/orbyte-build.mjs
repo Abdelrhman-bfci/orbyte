@@ -12,6 +12,12 @@ if (!supportedPlatforms.has(targetPlatform) || !supportedArchitectures.has(arch)
 	process.exit(2);
 }
 
+const iconCheck = spawnSync(process.execPath, [path.join(import.meta.dirname, 'verify-orbyte-icons.mjs')], { stdio: 'inherit' });
+if (iconCheck.error || iconCheck.status !== 0) {
+	console.error('[Orbyte] Local application icon verification failed.');
+	process.exit(iconCheck.status || 1);
+}
+
 if (packageKind === 'user-setup' && targetPlatform !== 'win32') {
 	console.error('[Orbyte] The user-setup package is available only for Windows.');
 	process.exit(2);

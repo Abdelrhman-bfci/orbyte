@@ -34,6 +34,7 @@
     "orbyte:run:windows": ".\\scripts\\code.bat",
     "orbyte:dev:linux": "pnpm run compile && pnpm run orbyte:run:linux",
     "orbyte:dev:windows": "pnpm run compile && pnpm run orbyte:run:windows",
+    "orbyte:verify-icons": "node scripts/verify-orbyte-icons.mjs",
     "orbyte:build:linux:x64": "node scripts/orbyte-build.mjs linux x64",
     "orbyte:build:linux:arm64": "node scripts/orbyte-build.mjs linux arm64",
     "orbyte:runtime:linux:x64": "bash scripts/download-llama-linux-runtime.sh x64",
