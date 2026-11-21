@@ -172,7 +172,7 @@ exit /b 0
 
 :ensure_cpp_build_tools
 call :has_cpp_build_tools
-if not errorlevel 1 exit /b 0
+if not errorlevel 1 goto cpp_build_tools_ready
 
 where winget >nul 2>nul
 if errorlevel 1 (
@@ -185,7 +185,7 @@ if errorlevel 1 (
 echo [Orbyte] Visual Studio C++ Build Tools were not found.
 echo [Orbyte] Installing the stable Build Tools with the C++ workload and Windows SDK...
 echo [Orbyte] Accept the Windows elevation prompt. This download can take several minutes.
-winget install --id Microsoft.VisualStudio.BuildTools -e --accept-package-agreements --accept-source-agreements --override "--wait --passive --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+winget install --id Microsoft.VisualStudio.BuildTools -e --accept-package-agreements --accept-source-agreements --override "--wait --passive --norestart --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre --includeRecommended"
 if errorlevel 1 (
 	echo [Orbyte] Visual Studio Build Tools installation failed.
 	exit /b 1
@@ -198,6 +198,57 @@ if errorlevel 1 (
 	echo [Orbyte] Include MSVC x64/x86 build tools and a Windows 10 or Windows 11 SDK.
 	exit /b 1
 )
+
+:cpp_build_tools_ready
+call :ensure_cpp_spectre_libraries
+exit /b %errorlevel%
+
+:ensure_cpp_spectre_libraries
+set "ORBYTE_VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+if not exist "%ORBYTE_VSWHERE%" (
+	echo [Orbyte] Visual Studio Installer discovery tool was not found.
+	echo [Orbyte] Open Visual Studio Installer and add C++ Spectre-mitigated libraries for x64/x86.
+	exit /b 1
+)
+
+set "ORBYTE_VS_INSTALL_PATH="
+for /f "usebackq delims=" %%i in (`"%ORBYTE_VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "ORBYTE_VS_INSTALL_PATH=%%i"
+if not defined ORBYTE_VS_INSTALL_PATH (
+	echo [Orbyte] Could not locate the Visual Studio C++ Build Tools installation.
+	exit /b 1
+)
+
+set "ORBYTE_VS_SPECTRE_PATH="
+for /f "usebackq delims=" %%i in (`"%ORBYTE_VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre -property installationPath`) do set "ORBYTE_VS_SPECTRE_PATH=%%i"
+if defined ORBYTE_VS_SPECTRE_PATH (
+	echo [Orbyte] C++ Spectre-mitigated libraries are installed.
+	exit /b 0
+)
+
+set "ORBYTE_VS_INSTALLER=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\setup.exe"
+if not exist "%ORBYTE_VS_INSTALLER%" (
+	echo [Orbyte] Visual Studio Installer was not found at %ORBYTE_VS_INSTALLER%.
+	exit /b 1
+)
+
+echo [Orbyte] Installing C++ Spectre-mitigated libraries for x64/x86...
+echo [Orbyte] Accept the Windows elevation prompt. This can take several minutes.
+"%ORBYTE_VS_INSTALLER%" modify --installPath "%ORBYTE_VS_INSTALL_PATH%" --add Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre --passive --norestart --wait
+set "ORBYTE_VS_INSTALL_EXIT=%errorlevel%"
+if not "%ORBYTE_VS_INSTALL_EXIT%"=="0" if not "%ORBYTE_VS_INSTALL_EXIT%"=="3010" (
+	echo [Orbyte] Visual Studio Installer failed with exit code %ORBYTE_VS_INSTALL_EXIT%.
+	exit /b %ORBYTE_VS_INSTALL_EXIT%
+)
+
+set "ORBYTE_VS_SPECTRE_PATH="
+for /f "usebackq delims=" %%i in (`"%ORBYTE_VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre -property installationPath`) do set "ORBYTE_VS_SPECTRE_PATH=%%i"
+if not defined ORBYTE_VS_SPECTRE_PATH (
+	echo [Orbyte] Spectre libraries finished installing, but the component was not detected.
+	echo [Orbyte] Restart Windows, then run this script again.
+	exit /b 1
+)
+
+echo [Orbyte] C++ Spectre-mitigated libraries are ready.
 exit /b 0
 
 :has_cpp_build_tools
