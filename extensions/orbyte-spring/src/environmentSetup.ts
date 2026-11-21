@@ -8,6 +8,7 @@ import { existsSync, statSync } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { findInstalledJdks } from './jdkRuntime';
 
 type MemoryMode = 'java' | 'node' | 'none';
 type ConfigurationScope = 'workspace' | 'global';
@@ -42,6 +43,7 @@ interface IEnvironmentViewState {
 	readonly javaJdkMajor?: number;
 	readonly javaIdeJdkMajor?: number;
 	readonly javaJdkReady: boolean;
+	readonly javaInstalledJdks: readonly { readonly version: number; readonly path: string }[];
 	readonly environments: readonly {
 		readonly id: string;
 		readonly label: string;
@@ -165,6 +167,12 @@ class EnvironmentSetupManager implements vscode.Disposable {
 				} else {
 					await vscode.env.openExternal(vscode.Uri.parse(downloadUrl(environment, version)));
 				}
+			} else if (payload.type === 'useJdkVersion' && environment.id === 'java') {
+				const version = typeof payload.version === 'string' ? Number(payload.version) : Number.NaN;
+				if (!Number.isFinite(version)) {
+					throw new Error('Select a valid JDK version.');
+				}
+				await vscode.commands.executeCommand('orbyte.java.useOrDownloadJdkInternal', 'unified', version);
 			} else if (payload.type === 'apply') {
 				await this.applyForm(environment, payload);
 			} else if (payload.type === 'openSelector' && environment.selectorCommand) {
@@ -324,6 +332,7 @@ async function buildViewState(selectedId?: string): Promise<IEnvironmentViewStat
 	const javaToolingExecutable = javaToolingPath ? resolveJavaExecutable(javaToolingPath) : undefined;
 	const javaToolingVersion = javaToolingExecutable ? await executableVersion(javaToolingExecutable) : undefined;
 	const javaIdeJdkMajor = javaToolingVersion ? parseJavaMajor(javaToolingVersion) : undefined;
+	const javaInstalledJdks = await findInstalledJdks();
 	return {
 		selectedId: environmentByIdOrLanguage(selectedId)?.id ?? detected?.id ?? 'java',
 		detectedId: detected?.id,
@@ -341,6 +350,7 @@ async function buildViewState(selectedId?: string): Promise<IEnvironmentViewStat
 		javaJdkMajor,
 		javaIdeJdkMajor,
 		javaJdkReady: Boolean(javaProjectPath && javaJdkMajor && javaIdeJdkMajor && javaIdeJdkMajor >= 25),
+		javaInstalledJdks,
 		environments: environments.map(environment => ({
 			id: environment.id,
 			label: environment.label,

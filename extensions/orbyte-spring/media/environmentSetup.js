@@ -51,6 +51,18 @@
 		return versions.map(version => `<option value="${escapeHtml(version)}" ${String(version) === String(selected) ? 'selected' : ''}>${escapeHtml(version)}${version === environment.recommendedVersion ? ' — Recommended' : ''}</option>`).join('');
 	}
 
+	function installedJdk(version) {
+		return state.javaInstalledJdks?.find(jdk => String(jdk.version) === String(version));
+	}
+
+	function javaVersionOptions(environment, selected) {
+		return environment.versions.map(version => {
+			const installed = installedJdk(version);
+			const suffix = `${version === environment.recommendedVersion ? ' — Recommended' : ''}${installed ? ' — Installed' : ''}`;
+			return `<option value="${escapeHtml(version)}" ${String(version) === String(selected) ? 'selected' : ''}>${escapeHtml(version)}${suffix}</option>`;
+		}).join('');
+	}
+
 	function pathBox(value, emptyLabel) {
 		return `<div class="path ${value ? '' : 'empty'}" title="${escapeHtml(value)}">${escapeHtml(value || emptyLabel)}</div>`;
 	}
@@ -58,9 +70,10 @@
 	function javaCards(environment, preferredVersion, detectedPath) {
 		const jdkPath = state.javaJdkPath || detectedPath;
 		const detectedSelection = String(state.javaJdkMajor || '');
-		const jdkVersion = environment.versions.includes(String(preferredVersion))
-			? String(preferredVersion)
-			: environment.versions.includes(detectedSelection) ? detectedSelection : environment.recommendedVersion;
+		const jdkVersion = environment.versions.includes(detectedSelection)
+			? detectedSelection
+			: environment.versions.includes(String(preferredVersion)) ? String(preferredVersion) : environment.recommendedVersion;
+		const installed = installedJdk(jdkVersion);
 		const jdkHint = state.javaJdkReady
 			? state.javaJdkMajor < 25
 				? `Project JDK ${escapeHtml(state.javaJdkMajor)} is ready. Orbyte automatically keeps JDK ${escapeHtml(state.javaIdeJdkMajor)} for compatible IDE tooling.`
@@ -70,7 +83,7 @@
 				: 'Choose Java 8 or newer for the project. Orbyte automatically keeps JDK 25+ for its Java extensions.';
 		return `
 		<section class="card full"><div class="card-head"><h3>Java Development Kit</h3><p>One setup controls the project JDK and keeps Orbyte's Java tooling on a compatible JDK automatically.</p></div><div class="card-body">
-			<div class="field"><label>JDK version</label><div class="row"><select id="version">${versionOptions(environment, jdkVersion)}</select><button class="button secondary" data-download data-role="unified">Download selected</button></div></div>
+			<div class="field"><label>JDK version</label><div class="row"><select id="version">${javaVersionOptions(environment, jdkVersion)}</select><button class="button secondary" id="jdkAction">${installed ? 'Use installed' : 'Download selected'}</button></div><div class="hint" id="jdkAvailability">${installed ? `Installed at ${escapeHtml(installed.path)}` : `JDK ${escapeHtml(jdkVersion)} is not installed yet.`}</div></div>
 			<div class="field"><label>Project JDK home</label><div class="row">${pathBox(jdkPath, 'No project JDK selected')}<button class="button ghost" data-local data-role="unified">Select local…</button></div></div>
 			<div class="hint ${state.javaJdkReady ? '' : 'warning'}">${jdkHint}</div>
 		</div></section>`;
@@ -108,6 +121,18 @@
 			const field = document.getElementById('version');
 			vscode.postMessage({ type: 'download', languageId: environment.id, role: button.dataset.role, version: field.value });
 		}));
+		const jdkAction = document.getElementById('jdkAction');
+		const versionField = document.getElementById('version');
+		if (jdkAction && versionField) {
+			const refreshJdkAction = () => {
+				const installed = installedJdk(versionField.value);
+				jdkAction.textContent = installed ? 'Use installed' : 'Download selected';
+				const availability = document.getElementById('jdkAvailability');
+				availability.textContent = installed ? `Installed at ${installed.path}` : `JDK ${versionField.value} is not installed yet.`;
+			};
+			versionField.addEventListener('change', refreshJdkAction);
+			jdkAction.addEventListener('click', () => vscode.postMessage({ type: 'useJdkVersion', languageId: environment.id, version: versionField.value }));
+		}
 		const heapAuto = document.getElementById('heapAuto');
 		if (heapAuto) { heapAuto.addEventListener('change', () => document.querySelector('.memory-input').classList.toggle('disabled', heapAuto.checked)); }
 		document.getElementById('selector')?.addEventListener('click', () => vscode.postMessage({ type: 'openSelector', languageId: environment.id }));

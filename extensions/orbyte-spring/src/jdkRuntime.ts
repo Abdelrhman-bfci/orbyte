@@ -5,6 +5,7 @@
 
 import { execFile } from 'child_process';
 import { existsSync, promises as fs } from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 
@@ -20,6 +21,13 @@ interface IJavaRuntimeSetting {
 	readonly default?: boolean;
 }
 
+export interface IInstalledJdk {
+	readonly version: number;
+	readonly path: string;
+}
+
+let installedJdkCache: { readonly expires: number; readonly value: readonly IInstalledJdk[] } | undefined;
+
 export function registerJdkRuntime(context: vscode.ExtensionContext): void {
 	const manager = new JdkRuntimeManager();
 	context.subscriptions.push(
@@ -27,6 +35,7 @@ export function registerJdkRuntime(context: vscode.ExtensionContext): void {
 		vscode.commands.registerCommand('orbyte.java.configureJdk', () => vscode.commands.executeCommand('orbyte.environment.configure', 'java')),
 		vscode.commands.registerCommand('orbyte.java.selectJdkInternal', (role: JdkRole, resource?: vscode.Uri) => manager.selectLocalJdk(role, resource)),
 		vscode.commands.registerCommand('orbyte.java.downloadJdkInternal', (role: JdkRole, version: number, resource?: vscode.Uri) => manager.downloadJdk(role, version, resource)),
+		vscode.commands.registerCommand('orbyte.java.useOrDownloadJdkInternal', (role: JdkRole, version: number, resource?: vscode.Uri) => manager.useOrDownloadJdk(role, version, resource)),
 	);
 	void manager.start();
 }
@@ -151,6 +160,11 @@ class JdkRuntimeManager implements vscode.Disposable {
 	}
 
 	async downloadJdk(role: JdkRole, version: number, resource = configurationResource()): Promise<void> {
+		const installed = (await findInstalledJdks()).find(jdk => jdk.version === version);
+		if (installed) {
+			await this.useJdk(role, installed.path, resource);
+			return;
+		}
 		if (process.platform !== 'win32') {
 			await vscode.env.openExternal(vscode.Uri.parse(`https://adoptium.net/temurin/releases/?version=${version}`));
 			void vscode.window.showInformationMessage('After installing the JDK, open “Orbyte: Java SDK Setup” and select its installation directory.');
@@ -162,11 +176,6 @@ class JdkRuntimeManager implements vscode.Disposable {
 		}
 
 		try {
-			const installed = await findInstalledWindowsJdk(version);
-			if (installed) {
-				await this.useJdk(role, installed, resource);
-				return;
-			}
 			await vscode.window.withProgress({
 				location: vscode.ProgressLocation.Notification,
 				title: `Installing Eclipse Temurin JDK ${version}`,
@@ -178,9 +187,9 @@ class JdkRuntimeManager implements vscode.Disposable {
 				'--accept-package-agreements',
 				'--accept-source-agreements',
 			]));
-			const home = await findInstalledWindowsJdk(version);
-			if (home) {
-				await this.useJdk(role, home, resource);
+			const downloaded = (await findInstalledJdks(true)).find(jdk => jdk.version === version);
+			if (downloaded) {
+				await this.useJdk(role, downloaded.path, resource);
 				return;
 			}
 			const action = await vscode.window.showInformationMessage(
@@ -196,6 +205,15 @@ class JdkRuntimeManager implements vscode.Disposable {
 		} catch (error) {
 			void vscode.window.showErrorMessage(`Could not install JDK ${version}: ${error instanceof Error ? error.message : String(error)}`);
 		}
+	}
+
+	async useOrDownloadJdk(role: JdkRole, version: number, resource = configurationResource()): Promise<void> {
+		const installed = (await findInstalledJdks()).find(jdk => jdk.version === version);
+		if (installed) {
+			await this.useJdk(role, installed.path, resource);
+			return;
+		}
+		await this.downloadJdk(role, version, resource);
 	}
 
 	private async useJdk(role: JdkRole, home: string, resource = configurationResource()): Promise<void> {
@@ -402,26 +420,117 @@ function parseJavaMajor(output: string): number | undefined {
 	return value ? Number(value[2]) : undefined;
 }
 
-async function findInstalledWindowsJdk(version: number): Promise<string | undefined> {
-	const roots = [
-		process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Eclipse Adoptium'),
-		process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', 'Eclipse Adoptium'),
-		process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Java'),
-	].filter((value): value is string => Boolean(value));
-	for (const root of roots) {
+export async function findInstalledJdks(force = false): Promise<readonly IInstalledJdk[]> {
+	if (!force && installedJdkCache && installedJdkCache.expires > Date.now()) {
+		return installedJdkCache.value;
+	}
+	const candidates = new Set<string>();
+	for (const candidate of [
+		configuredLanguageServerJdkHome(),
+		configuredJdkEnvironment(configurationResource())?.JAVA_HOME,
+		process.env.JAVA_HOME,
+	]) {
+		if (candidate) {
+			candidates.add(candidate);
+		}
+	}
+
+	if (process.platform === 'darwin') {
 		try {
-			const entries = await fs.readdir(root, { withFileTypes: true });
-			for (const entry of entries.sort((left, right) => right.name.localeCompare(left.name))) {
-				const candidate = path.join(root, entry.name);
-				if (entry.isDirectory() && entry.name.toLowerCase().includes(`jdk-${version}`) && isJdkHome(candidate)) {
-					return candidate;
+			const output = await run('/usr/libexec/java_home', ['-V']);
+			for (const line of output.split(/\r?\n/)) {
+				const match = /(\/.*\/Contents\/Home)\s*$/.exec(line);
+				if (match) {
+					candidates.add(match[1]);
 				}
 			}
 		} catch {
-			// Continue with the next standard installation directory.
+			// Standard installation directories are scanned below.
 		}
 	}
-	return undefined;
+
+	const roots = process.platform === 'win32'
+		? [
+			process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Eclipse Adoptium'),
+			process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Java'),
+			process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Microsoft'),
+			process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Amazon Corretto'),
+			process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Zulu'),
+			process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Azul Systems'),
+			process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', 'Eclipse Adoptium'),
+			process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', 'Java'),
+		]
+		: process.platform === 'darwin'
+			? [
+				'/Library/Java/JavaVirtualMachines',
+				path.join(os.homedir(), 'Library', 'Java', 'JavaVirtualMachines'),
+				path.join(os.homedir(), '.sdkman', 'candidates', 'java'),
+				path.join(os.homedir(), '.asdf', 'installs', 'java'),
+				path.join(os.homedir(), '.jabba', 'jdk'),
+				path.join(os.homedir(), '.local', 'share', 'mise', 'installs', 'java'),
+				...['openjdk', 'openjdk@8', 'openjdk@11', 'openjdk@17', 'openjdk@21', 'openjdk@25', 'openjdk@26', 'openjdk@27']
+					.flatMap(name => [path.join('/opt/homebrew/opt', name), path.join('/usr/local/opt', name)]),
+			]
+			: [
+				'/usr/lib/jvm',
+				'/usr/java',
+				'/opt/java',
+				path.join(os.homedir(), '.sdkman', 'candidates', 'java'),
+				path.join(os.homedir(), '.asdf', 'installs', 'java'),
+				path.join(os.homedir(), '.jabba', 'jdk'),
+				path.join(os.homedir(), '.local', 'share', 'mise', 'installs', 'java'),
+			];
+	for (const root of roots.filter((value): value is string => Boolean(value))) {
+		await collectJdkCandidates(root, candidates, 2);
+	}
+
+	try {
+		const output = await run(process.platform === 'win32' ? 'where.exe' : 'which', [process.platform === 'win32' ? 'java.exe' : 'java']);
+		for (const executable of output.split(/\r?\n/).map(line => line.trim()).filter(Boolean)) {
+			candidates.add(path.dirname(path.dirname(executable)));
+		}
+	} catch {
+		// PATH does not expose Java; standard locations may still contain installations.
+	}
+
+	const result: IInstalledJdk[] = [];
+	const seen = new Set<string>();
+	for (const candidate of candidates) {
+		const home = normalizeJdkHome(candidate);
+		const key = process.platform === 'win32' ? path.resolve(home).toLowerCase() : path.resolve(home);
+		if (seen.has(key) || !isJdkHome(home)) {
+			continue;
+		}
+		seen.add(key);
+		const version = await readJavaMajor(home);
+		if (version) {
+			result.push({ version, path: home });
+		}
+	}
+	result.sort((left, right) => right.version - left.version || left.path.localeCompare(right.path));
+	installedJdkCache = { expires: Date.now() + 5000, value: result };
+	return result;
+}
+
+async function collectJdkCandidates(root: string, candidates: Set<string>, depth: number): Promise<void> {
+	const home = normalizeJdkHome(root);
+	if (isJdkHome(home)) {
+		candidates.add(home);
+		return;
+	}
+	if (depth <= 0) {
+		return;
+	}
+	try {
+		const entries = await fs.readdir(root, { withFileTypes: true });
+		for (const entry of entries) {
+			if (entry.isDirectory() || entry.isSymbolicLink()) {
+				await collectJdkCandidates(path.join(root, entry.name), candidates, depth - 1);
+			}
+		}
+	} catch {
+		// Ignore missing or protected installation directories.
+	}
 }
 
 function run(command: string, args: string[]): Promise<string> {
