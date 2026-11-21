@@ -45,6 +45,7 @@ import { IEditorService } from '../../../services/editor/common/editorService.js
 import { ISearchService, QueryType } from '../../../services/search/common/search.js';
 import { ITextFileService } from '../../../services/textfile/common/textfiles.js';
 import { parseLocalAIAgentResponse, validateLocalAIAgentProposal } from './context/agentEditProtocol.js';
+import { getLocalAIAgentStreamProgress } from './context/agentStreamProgress.js';
 import { ILocalAIContext, ILocalAIContextService } from './context/localAIContext.js';
 import { formatAgentFeatureImplementerMessages, formatAgentFeatureReviewerMessages, formatAgentRepairMessages, formatAgentTaskPlannerMessages, formatAgentTesterMessages, formatChatMessages, ILocalAIAgentFeatureTask, ILocalAIAttachment, ILocalAIWorkspaceRootContext, LocalAIChatMode } from './context/promptFormatter.js';
 import { localAIContextTokens, scoreLocalAIWorkspacePath } from './context/smartWorkspaceContext.js';
@@ -80,6 +81,8 @@ interface IChatAgentStep {
 	status: AgentSubagentStatus;
 	detail: string;
 	files?: readonly string[];
+	/** Ephemeral size of the active model stream; never used as an edit proposal. */
+	streamedCharacters?: number;
 }
 
 interface IChatAgentChangeSummary {
@@ -258,6 +261,14 @@ export class LocalAIViewPane extends ViewPane {
 			if (response?.role === 'assistant') {
 				if (response.mode === 'agent') {
 					this._activeAgentResponse += event.token;
+					const agentRequest = this._pendingAgentRequest;
+					if (agentRequest) {
+						const step = response.agentSteps?.find(candidate => candidate.id === (agentRequest.stepId ?? agentRequest.stage));
+						if (step?.status === 'running') {
+							step.streamedCharacters = this._activeAgentResponse.length;
+							this._renderScheduler.schedule();
+						}
+					}
 				} else {
 					response.content += event.token;
 					this._renderScheduler.schedule();
@@ -1179,6 +1190,7 @@ export class LocalAIViewPane extends ViewPane {
 			existing.status = status;
 			existing.detail = detail;
 			existing.files = files;
+			existing.streamedCharacters = undefined;
 			this._emitActivity();
 			return;
 		}
@@ -2423,6 +2435,20 @@ export class LocalAIViewPane extends ViewPane {
 							: localize('localAISubagentFailed', "Failed");
 			const detail = dom.append(content, dom.$('.local-ai-subagent-detail'));
 			detail.textContent = step.detail;
+			if (step.status === 'running' && step.streamedCharacters) {
+				const agentRequest = this._pendingAgentRequest;
+				const progress = agentRequest && step.id === (agentRequest.stepId ?? agentRequest.stage)
+					? getLocalAIAgentStreamProgress(agentRequest.stage, this._activeAgentResponse)
+					: undefined;
+				const live = dom.append(content, dom.$('.local-ai-subagent-live'));
+				const liveIcon = dom.append(live, dom.$('span.codicon.codicon-pulse'));
+				liveIcon.setAttribute('aria-hidden', 'true');
+				const received = Math.max(1, Math.ceil(step.streamedCharacters / 4));
+				const liveText = dom.append(live, dom.$('span'));
+				liveText.textContent = progress?.preview
+					? localize('localAISubagentStreamingPreview', "Live · about {0} tokens · {1}", received, progress.preview)
+					: localize('localAISubagentStreaming', "Live · about {0} tokens received", received);
+			}
 			if (step.files?.length) {
 				const files = dom.append(content, dom.$('.local-ai-subagent-files'));
 				for (const file of step.files.slice(0, maximumAttachedFiles)) {

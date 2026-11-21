@@ -6,10 +6,32 @@
 import assert from 'assert';
 import { getLocalLLMContextWindowTokens, getLocalLLMGenerationTokens } from '../../../../../platform/localLLM/common/localLLMContextProfile.js';
 import { parseLocalAIAgentResponse, validateLocalAIAgentProposal } from '../../browser/context/agentEditProtocol.js';
+import { getLocalAIAgentStreamProgress } from '../../browser/context/agentStreamProgress.js';
 import { formatAgentFeatureImplementerMessages, formatAgentFeatureReviewerMessages, formatAgentPlannerMessages, formatAgentRepairMessages, formatAgentTaskPlannerMessages, formatAgentTesterMessages, formatChatMessages, ILocalAIAgentFeatureTask, isNewSourceCreationRequest } from '../../browser/context/promptFormatter.js';
 import { scoreLocalAIWorkspacePath } from '../../browser/context/smartWorkspaceContext.js';
 
 suite('Local AI Agent edit protocol', () => {
+	test('streams safe progress for every subagent without exposing edit payloads', () => {
+		const planner = getLocalAIAgentStreamProgress('planner', '<agent_task_plan><task id="feature-1" title="Add employee validation"><instruction>Update EmployeeService</instruction>');
+		const implementer = getLocalAIAgentStreamProgress('implementer', '<local_ai_agent_response><summary>Add validation</summary><changes><edit uri="file:///workspace/EmployeeService.java"><replace><![CDATA[secret source code]]></replace>');
+		const reviewer = getLocalAIAgentStreamProgress('reviewer', '<agent_feature_review><summary>Contract remains compatible</summary>');
+		const tester = getLocalAIAgentStreamProgress('tester', '<agent_test_plan><checks><check>Reject an empty employee name</check>');
+
+		assert.strictEqual(planner.preview, 'Add employee validation');
+		assert.strictEqual(implementer.preview, 'Add validation');
+		assert.ok(!implementer.preview?.includes('secret source code'));
+		assert.strictEqual(reviewer.preview, 'Contract remains compatible');
+		assert.strictEqual(tester.preview, 'Reject an empty employee name');
+		assert.strictEqual(planner.receivedCharacters, '<agent_task_plan><task id="feature-1" title="Add employee validation"><instruction>Update EmployeeService</instruction>'.length);
+	});
+
+	test('reports streaming progress before a safe preview field is available', () => {
+		const progress = getLocalAIAgentStreamProgress('implementer', '<local_ai_agent_response><changes>');
+
+		assert.strictEqual(progress.preview, undefined);
+		assert.ok(progress.receivedCharacters > 0);
+	});
+
 	test('detects a named service without an explicit file mention', () => {
 		const prompt = 'Add a saveById method in employee service';
 		const sourceScore = scoreLocalAIWorkspacePath(prompt, 'src/main/java/com/example/demo/EmployeeService.java');
