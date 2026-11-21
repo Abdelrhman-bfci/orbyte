@@ -73,19 +73,16 @@
         { "command": "orbyte.hotReload.disable", "when": "resourceScheme == file && orbyte.hotReload.enabled", "group": "navigation@0" },
         { "command": "orbyte.hotReload.enable", "when": "resourceScheme == file && !orbyte.hotReload.enabled", "group": "navigation@0" },
         { "command": "orbyte.environment.configure", "when": "resourceLangId == javascript || resourceLangId == javascriptreact || resourceLangId == typescript || resourceLangId == typescriptreact || resourceLangId == python || resourceLangId == c || resourceLangId == cpp || resourceLangId == csharp || resourceLangId == fsharp || resourceLangId == go || resourceLangId == rust || resourceLangId == php || resourceLangId == ruby", "group": "navigation@0" },
-        { "command": "orbyte.java.configureJdk", "when": "resourceLangId == java || resourceLangId == kotlin || resourceLangId == groovy", "group": "navigation@0" },
-        { "command": "orbyte.run.configure", "when": "resourceScheme == file && orbyte.run.applicationDetected", "group": "navigation@1" },
-        { "command": "orbyte.run.runDetected", "when": "resourceScheme == file && orbyte.run.applicationDetected && !orbyte.run.applicationRunning", "group": "navigation@2" },
-        { "command": "orbyte.run.debugDetected", "when": "resourceScheme == file && orbyte.run.applicationDetected && !orbyte.run.applicationRunning", "group": "navigation@3" },
-        { "command": "orbyte.run.stopSelected", "when": "resourceScheme == file && orbyte.run.applicationRunning", "group": "navigation@2" }
+        { "command": "orbyte.java.configureJdk", "when": "resourceLangId == java || resourceLangId == kotlin || resourceLangId == groovy", "group": "navigation@0" }
       ],
       "titleBar": [
-        { "command": "orbyte.run.configure", "when": "orbyte.run.applicationDetected", "group": "navigation@1" },
-        { "command": "orbyte.run.runSelected", "when": "orbyte.run.applicationDetected && !orbyte.run.applicationRunning", "group": "navigation@2" },
-        { "command": "orbyte.run.debugSelected", "when": "orbyte.run.applicationDetected && !orbyte.run.applicationRunning", "group": "navigation@3" },
-        { "command": "orbyte.run.stopSelected", "when": "orbyte.run.applicationRunning", "group": "navigation@2" },
-        { "command": "orbyte.hotReload.disable", "when": "orbyte.hotReload.enabled", "group": "navigation@5" },
-        { "command": "orbyte.hotReload.enable", "when": "!orbyte.hotReload.enabled", "group": "navigation@5" }
+        { "command": "orbyte.run.select", "when": "orbyte.run.applicationDetected", "group": "navigation@1" },
+        { "command": "orbyte.run.configure", "when": "orbyte.run.applicationDetected", "group": "navigation@2" },
+        { "command": "orbyte.run.runSelected", "when": "orbyte.run.applicationDetected", "group": "navigation@3" },
+        { "command": "orbyte.run.debugSelected", "when": "orbyte.run.applicationDetected", "group": "navigation@4" },
+        { "command": "orbyte.run.stopSelected", "when": "orbyte.run.applicationDetected", "group": "navigation@5" },
+        { "command": "orbyte.hotReload.disable", "when": "orbyte.hotReload.enabled", "group": "navigation@6" },
+        { "command": "orbyte.hotReload.enable", "when": "!orbyte.hotReload.enabled", "group": "navigation@6" }
       ],
       "explorer/context": [
         { "command": "orbyte.run.configure", "when": "orbyte.run.applicationDetected", "group": "orbyte@0" },
@@ -185,6 +182,9 @@
         "orbyte.enterprise.websphere.serverName": { "type": "string", "default": "server1", "scope": "resource", "description": "WebSphere application server name." },
         "orbyte.enterprise.websphere.debugPort": { "type": "number", "default": 7777, "minimum": 1, "maximum": 65535, "scope": "resource", "description": "JDWP port used when attaching the Java debugger to WebSphere." }
       }
+    },
+    "configurationDefaults": {
+      "debug.toolBarLocation": "hidden"
     }
   },
   "devDependencies": { "@types/node": "24.x" },
