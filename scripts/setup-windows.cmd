@@ -100,6 +100,20 @@ if not exist "node_modules\.bin\npm-run-all2.cmd" (
 	exit /b 1
 )
 
+if not exist "build\node_modules\gulp-merge-json\package.json" (
+	echo [Orbyte] Dependency installation finished without gulp-merge-json.
+	echo [Orbyte] The repository dependencies are incomplete. Run this script again.
+	exit /b 1
+)
+
+rem This marker is written only after a complete, validated pnpm install. The
+rem compile wrapper compares it with the lockfile and package manifests so a
+rem partial or stale node_modules tree is repaired before compilation starts.
+if not exist ".build" mkdir ".build"
+if errorlevel 1 exit /b 1
+> ".build\orbyte-windows-dependencies.ready" echo ready
+if errorlevel 1 exit /b 1
+
 echo [Orbyte] Setup complete with Node.js %ORBYTE_ACTIVE_NODE% and pnpm %ORBYTE_ACTIVE_PNPM%.
 echo [Orbyte] Run: pnpm run compile
 echo [Orbyte] Then: pnpm run orbyte:run:windows

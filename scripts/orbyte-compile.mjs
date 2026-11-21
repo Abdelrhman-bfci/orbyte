@@ -3,14 +3,43 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const repositoryRoot = path.resolve(import.meta.dirname, '..');
 const runner = path.join(repositoryRoot, 'node_modules', 'npm-run-all2', 'bin', 'npm-run-all', 'index.js');
+const dependencyMarker = path.join(repositoryRoot, '.build', 'orbyte-windows-dependencies.ready');
+const criticalDependencies = [
+	runner,
+	path.join(repositoryRoot, 'build', 'node_modules', 'gulp-merge-json', 'package.json'),
+];
+const dependencyInputs = [
+	path.join(repositoryRoot, 'package.json'),
+	path.join(repositoryRoot, 'build', 'package.json'),
+	path.join(repositoryRoot, 'pnpm-lock.yaml'),
+	path.join(repositoryRoot, 'pnpm-workspace.yaml'),
+	path.join(repositoryRoot, '.pnpmfile.mjs'),
+];
 
-if (!existsSync(runner)) {
+function dependenciesAreReady() {
+	if (!criticalDependencies.every(dependency => existsSync(dependency))) {
+		return false;
+	}
+
+	if (process.platform !== 'win32') {
+		return true;
+	}
+
+	if (!existsSync(dependencyMarker)) {
+		return false;
+	}
+
+	const markerModifiedAt = statSync(dependencyMarker).mtimeMs;
+	return dependencyInputs.every(input => !existsSync(input) || statSync(input).mtimeMs <= markerModifiedAt);
+}
+
+if (!dependenciesAreReady()) {
 	console.log('[Orbyte] Development dependencies are incomplete; repairing them before compilation...');
 
 	let install;
@@ -43,8 +72,9 @@ if (!existsSync(runner)) {
 	}
 }
 
-if (!existsSync(runner)) {
-	console.error('[Orbyte] npm-run-all2 is still missing after dependency repair.');
+if (!dependenciesAreReady()) {
+	console.error('[Orbyte] Development dependencies are still incomplete after dependency repair.');
+	console.error('[Orbyte] Required packages include npm-run-all2 and gulp-merge-json.');
 	console.error('[Orbyte] Ensure NODE_ENV is not set to production, then run scripts\\setup-windows.cmd.');
 	process.exit(1);
 }
