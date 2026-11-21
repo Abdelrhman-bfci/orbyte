@@ -6,7 +6,7 @@
 import './media/activitybarpart.css';
 import './media/activityaction.css';
 import { localize, localize2 } from '../../../../nls.js';
-import { ActionsOrientation } from '../../../../base/browser/ui/actionbar/actionbar.js';
+import { ActionBar, ActionsOrientation } from '../../../../base/browser/ui/actionbar/actionbar.js';
 import { Part } from '../../part.js';
 import { mainWindow } from '../../../../base/browser/window.js';
 import { ActivityBarPosition, IWorkbenchLayoutService, LayoutSettings, Parts, Position, FLOATING_PANEL_INNER_MARGIN, FLOATING_PANEL_MARGIN, getFloatingPanelMargin, getFloatingPanelOuterMargin, isFloatingTopEdgeExposed, isCompactMenuInTitlebar } from '../../../services/layout/browser/layoutService.js';
@@ -42,6 +42,9 @@ import { IWorkbenchEnvironmentService } from '../../../services/environment/comm
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { SwitchCompositeViewAction } from '../compositeBarActions.js';
 import { IHostService } from '../../../services/host/browser/host.js';
+import { ThemeIcon } from '../../../../base/common/themables.js';
+import { Codicon } from '../../../../base/common/codicons.js';
+import { ICommandService } from '../../../../platform/commands/common/commands.js';
 
 export class ActivitybarPart extends Part {
 
@@ -423,6 +426,7 @@ export class ActivitybarPart extends Part {
 export class ActivityBarCompositeBar extends PaneCompositeBar {
 
 	private element: HTMLElement | undefined;
+	private homeActionBarContainer: HTMLElement | undefined;
 
 	private readonly menuBar = this._register(new MutableDisposable<CustomMenubarControl>());
 	private menuBarContainer: HTMLElement | undefined;
@@ -434,7 +438,7 @@ export class ActivityBarCompositeBar extends PaneCompositeBar {
 	private readonly menuBarKeyboardNavigation = this._register(new MutableDisposable<DisposableStore>());
 
 	constructor(
-		location: ViewContainerLocation,
+		private readonly activityBarLocation: ViewContainerLocation,
 		options: IPaneCompositeBarOptions,
 		part: Parts,
 		paneCompositePart: IPaneCompositePart,
@@ -450,7 +454,7 @@ export class ActivityBarCompositeBar extends PaneCompositeBar {
 		@IMenuService private readonly menuService: IMenuService,
 		@IWorkbenchLayoutService layoutService: IWorkbenchLayoutService,
 	) {
-		super(location,
+		super(activityBarLocation,
 			{
 				...options,
 				fillExtraContextMenuActions: (actions, e) => {
@@ -597,6 +601,20 @@ export class ActivityBarCompositeBar extends PaneCompositeBar {
 	override create(parent: HTMLElement): HTMLElement {
 		this.element = parent;
 
+		if (this.activityBarLocation === ViewContainerLocation.Sidebar) {
+			this.homeActionBarContainer = append(this.element, $('.composite-bar.orbyte-home-activity-action'));
+			const homeActionBar = this._register(new ActionBar(this.homeActionBarContainer, {
+				orientation: this.options.orientation,
+				ariaLabel: localize('orbyteHomeActivityBar', "Orbyte Home")
+			}));
+			homeActionBar.push(toAction({
+				id: 'workbench.action.openWalkthrough',
+				label: localize('orbyteHomeActivityBar', "Orbyte Home"),
+				class: ThemeIcon.asClassName(Codicon.home),
+				run: () => this.instantiationService.invokeFunction(accessor => accessor.get(ICommandService).executeCommand('workbench.action.openWalkthrough'))
+			}), { icon: true, label: false });
+		}
+
 		// Install menubar if compact and not owned by the titlebar
 		if (this.shouldInstallMenubar()) {
 			this.installMenubar();
@@ -618,6 +636,14 @@ export class ActivityBarCompositeBar extends PaneCompositeBar {
 
 	override layout(width: number, height: number): void {
 		this.lastLayoutDimensions = new Dimension(width, height);
+
+		if (this.homeActionBarContainer) {
+			if (this.options.orientation === ActionsOrientation.VERTICAL) {
+				height -= this.homeActionBarContainer.clientHeight;
+			} else {
+				width -= this.homeActionBarContainer.clientWidth;
+			}
+		}
 
 		if (this.menuBarContainer) {
 			if (this.options.orientation === ActionsOrientation.VERTICAL) {

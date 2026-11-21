@@ -117,6 +117,37 @@
 	flex: 1;
 }
 
+.monaco-workbench .part.sidebar > .title > .composite-bar-container > .orbyte-home-activity-action,
+.monaco-workbench .part.sidebar > .header-or-footer > .composite-bar-container > .orbyte-home-activity-action {
+	flex: 0 0 auto;
+}
+
+.monaco-workbench .part.sidebar > .title > .composite-bar-container > .orbyte-home-activity-action > .monaco-action-bar .action-item,
+.monaco-workbench .part.sidebar > .header-or-footer > .composite-bar-container > .orbyte-home-activity-action > .monaco-action-bar .action-item {
+	display: flex;
+	height: 35px;
+	padding: 0 3px;
+}
+
+.monaco-workbench .part.sidebar > .title > .composite-bar-container > .orbyte-home-activity-action > .monaco-action-bar .action-label,
+.monaco-workbench .part.sidebar > .header-or-footer > .composite-bar-container > .orbyte-home-activity-action > .monaco-action-bar .action-label {
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	color: var(--vscode-activityBarTop-inactiveForeground);
+	border-radius: var(--vscode-cornerRadius-medium);
+}
+
+.monaco-workbench .part.sidebar > .title > .composite-bar-container > .orbyte-home-activity-action > .monaco-action-bar .action-item:hover .action-label,
+.monaco-workbench .part.sidebar > .title > .composite-bar-container > .orbyte-home-activity-action > .monaco-action-bar .action-item:focus .action-label,
+.monaco-workbench .part.sidebar > .header-or-footer > .composite-bar-container > .orbyte-home-activity-action > .monaco-action-bar .action-item:hover .action-label,
+.monaco-workbench .part.sidebar > .header-or-footer > .composite-bar-container > .orbyte-home-activity-action > .monaco-action-bar .action-item:focus .action-label {
+	color: var(--vscode-activityBarTop-foreground);
+	background-color: var(--vscode-toolbar-hoverBackground);
+}
+
 .monaco-workbench .sidebar.part.pane-composite-part > .composite.title.has-composite-bar > .title-actions {
 	flex: inherit;
 }

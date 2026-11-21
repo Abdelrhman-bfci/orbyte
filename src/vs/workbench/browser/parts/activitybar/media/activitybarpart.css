@@ -61,6 +61,11 @@
 	margin-bottom: auto;
 }
 
+.monaco-workbench .activitybar > .content > .orbyte-home-activity-action {
+	flex: 0 0 auto;
+	margin-bottom: 0;
+}
+
 /** Menu Bar */
 
 .monaco-workbench .activitybar .menubar {
