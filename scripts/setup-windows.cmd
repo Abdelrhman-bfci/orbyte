@@ -238,7 +238,7 @@ exit /b 1
 :vs_installer_ready
 echo [Orbyte] Installing C++ Spectre-mitigated libraries for x64/x86...
 echo [Orbyte] Accept the Windows elevation prompt. This can take several minutes.
-"%ORBYTE_VS_INSTALLER%" modify --installPath "%ORBYTE_VS_INSTALL_PATH%" --add Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre --passive --norestart --wait
+"%ORBYTE_VS_INSTALLER%" modify --installPath "%ORBYTE_VS_INSTALL_PATH%" --add Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre --passive --norestart
 set "ORBYTE_VS_INSTALL_EXIT=%errorlevel%"
 if not "%ORBYTE_VS_INSTALL_EXIT%"=="0" if not "%ORBYTE_VS_INSTALL_EXIT%"=="3010" (
 	echo [Orbyte] Visual Studio Installer failed with exit code %ORBYTE_VS_INSTALL_EXIT%.
