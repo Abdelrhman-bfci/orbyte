@@ -82,12 +82,12 @@ class JdkRuntimeManager implements vscode.Disposable {
 		}
 		this.promptStarted = true;
 		await new Promise(resolve => setTimeout(resolve, 900));
-		if (!(await hasJavaProjectContext()) || await hasUnifiedJdk()) {
+		if (!(await hasJavaProjectContext()) || await hasManagedJdkConfiguration()) {
 			return;
 		}
 
 		const action = await vscode.window.showWarningMessage(
-			`Java requires JDK ${LANGUAGE_SERVER_JDK_VERSION} or newer. One selection configures both Orbyte tooling and the current project.`,
+			`Java setup is incomplete. Choose the project JDK once and Orbyte will also manage the JDK ${LANGUAGE_SERVER_JDK_VERSION}+ runtime required by its Java tooling.`,
 			'Open Full Setup',
 			'Not Now',
 		);
@@ -134,7 +134,7 @@ class JdkRuntimeManager implements vscode.Disposable {
 			canSelectMany: false,
 			openLabel: 'Use this JDK',
 			title: role === 'unified'
-				? `Select JDK ${LANGUAGE_SERVER_JDK_VERSION} or newer for Orbyte and this project`
+				? 'Select the project JDK (Java 8 or newer)'
 				: role === 'languageServer'
 					? `Select JDK ${LANGUAGE_SERVER_JDK_VERSION} or newer for Java tooling`
 					: 'Select the JDK for this project',
@@ -206,11 +206,26 @@ class JdkRuntimeManager implements vscode.Disposable {
 		}
 		if (role === 'unified') {
 			if (version < LANGUAGE_SERVER_JDK_VERSION) {
-				void vscode.window.showErrorMessage(`JDK ${version} is too old. Select JDK ${LANGUAGE_SERVER_JDK_VERSION} or newer so the same JDK can run both Orbyte tooling and this project.`);
+				await this.configureProjectJdk(home, version, resource, false);
+				await recordPreferredJdkVersion(version, resource);
+				if (await hasLanguageServerJdk()) {
+					const toolingVersion = await detectedLanguageServerJdkVersion();
+					void vscode.window.showInformationMessage(`Project JDK ${version} is ready. Orbyte continues using JDK ${toolingVersion} for Java tooling.`);
+				} else {
+					const action = await vscode.window.showWarningMessage(
+						`Project JDK ${version} is configured. Orbyte also needs JDK ${LANGUAGE_SERVER_JDK_VERSION}+ to run the Java extensions.`,
+						`Download JDK ${LANGUAGE_SERVER_JDK_VERSION}`,
+					);
+					if (action === `Download JDK ${LANGUAGE_SERVER_JDK_VERSION}`) {
+						await this.downloadJdk('languageServer', LANGUAGE_SERVER_JDK_VERSION, resource);
+					}
+				}
+				await this.updateStatusBar();
 				return;
 			}
 			await this.configureLanguageServerJdk(home, version, false);
 			await this.configureProjectJdk(home, version, resource, false);
+			await recordPreferredJdkVersion(version, resource);
 			const action = await vscode.window.showInformationMessage(
 				`JDK ${version} is now configured for both Orbyte Java tooling and this project. Reload Orbyte to activate it everywhere.`,
 				'Reload Now',
@@ -280,14 +295,16 @@ class JdkRuntimeManager implements vscode.Disposable {
 			return;
 		}
 		const toolingVersion = await detectedLanguageServerJdkVersion();
-		const unified = await hasUnifiedJdk();
-		if (!toolingVersion || toolingVersion < LANGUAGE_SERVER_JDK_VERSION || !unified) {
+		const projectHome = configuredJdkEnvironment(configurationResource())?.JAVA_HOME;
+		const projectVersion = projectHome ? await readJavaMajor(projectHome) : undefined;
+		const ready = await hasManagedJdkConfiguration();
+		if (!toolingVersion || toolingVersion < LANGUAGE_SERVER_JDK_VERSION || !ready) {
 			this.statusBar.text = '$(warning) Java SDK Setup';
 			this.statusBar.tooltip = `Select one JDK ${LANGUAGE_SERVER_JDK_VERSION} or newer for both Orbyte Java tooling and this project.`;
 			this.statusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
 		} else {
-			this.statusBar.text = `$(coffee) Java ${toolingVersion}`;
-			this.statusBar.tooltip = 'The unified Java SDK is ready. Click to change it for Orbyte and this project.';
+			this.statusBar.text = `$(coffee) Java ${projectVersion}${projectVersion !== toolingVersion ? ` · IDE ${toolingVersion}` : ''}`;
+			this.statusBar.tooltip = 'Java is ready. One setup manages the project JDK and Orbyte tooling runtime.';
 			this.statusBar.backgroundColor = undefined;
 		}
 		this.statusBar.show();
@@ -327,13 +344,21 @@ async function hasLanguageServerJdk(): Promise<boolean> {
 	return Boolean(version && version >= LANGUAGE_SERVER_JDK_VERSION);
 }
 
-async function hasUnifiedJdk(resource = configurationResource()): Promise<boolean> {
-	const toolingHome = configuredLanguageServerJdkHome();
+async function hasManagedJdkConfiguration(resource = configurationResource()): Promise<boolean> {
 	const projectHome = configuredJdkEnvironment(resource)?.JAVA_HOME;
-	if (!toolingHome || !projectHome || path.resolve(toolingHome) !== path.resolve(projectHome)) {
+	if (!projectHome) {
 		return false;
 	}
 	return hasLanguageServerJdk();
+}
+
+async function recordPreferredJdkVersion(version: number, resource = configurationResource()): Promise<void> {
+	const configuration = vscode.workspace.getConfiguration('orbyte.environment', resource);
+	const versions = configuration.get<Record<string, string>>('preferredVersions', {});
+	const target = vscode.workspace.workspaceFolders?.length
+		? vscode.ConfigurationTarget.Workspace
+		: vscode.ConfigurationTarget.Global;
+	await configuration.update('preferredVersions', { ...versions, java: String(version) }, target);
 }
 
 async function hasJavaProjectContext(): Promise<boolean> {

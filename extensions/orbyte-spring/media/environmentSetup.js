@@ -57,18 +57,21 @@
 
 	function javaCards(environment, preferredVersion, detectedPath) {
 		const jdkPath = state.javaJdkPath || detectedPath;
-		const jdkVersion = Number(preferredVersion) >= 25 ? preferredVersion : '25';
+		const detectedSelection = String(state.javaJdkMajor || '');
+		const jdkVersion = environment.versions.includes(String(preferredVersion))
+			? String(preferredVersion)
+			: environment.versions.includes(detectedSelection) ? detectedSelection : environment.recommendedVersion;
 		const jdkHint = state.javaJdkReady
-			? `JDK ${escapeHtml(state.javaJdkMajor)} is configured once for both Orbyte tooling and this project.`
-			: state.javaJdkMajor && state.javaJdkMajor >= 25
-				? `JDK ${escapeHtml(state.javaJdkMajor)} was detected, but the older tooling and project settings are not synchronized yet. Select it once to unify them.`
-				: state.javaJdkMajor
-					? `Detected Java ${escapeHtml(state.javaJdkMajor)}, but JDK 25 or newer is required to run the Java extensions and project tools together.`
-					: 'JDK 25 or newer is required for Java tooling and will also build, run, test, and debug this project.';
+			? state.javaJdkMajor < 25
+				? `Project JDK ${escapeHtml(state.javaJdkMajor)} is ready. Orbyte automatically keeps JDK ${escapeHtml(state.javaIdeJdkMajor)} for compatible IDE tooling.`
+				: `JDK ${escapeHtml(state.javaJdkMajor)} is configured for both Orbyte tooling and this project.`
+			: state.javaJdkMajor
+				? `Project JDK ${escapeHtml(state.javaJdkMajor)} was detected. Finish setup so Orbyte can provide JDK 25+ for the Java extensions.`
+				: 'Choose Java 8 or newer for the project. Orbyte automatically keeps JDK 25+ for its Java extensions.';
 		return `
-		<section class="card full"><div class="card-head"><h3>Java Development Kit</h3><p>One JDK runs Orbyte's Java extensions and builds, runs, tests, and debugs this project. JDK 25+ is required.</p></div><div class="card-body">
+		<section class="card full"><div class="card-head"><h3>Java Development Kit</h3><p>One setup controls the project JDK and keeps Orbyte's Java tooling on a compatible JDK automatically.</p></div><div class="card-body">
 			<div class="field"><label>JDK version</label><div class="row"><select id="version">${versionOptions(environment, jdkVersion)}</select><button class="button secondary" data-download data-role="unified">Download selected</button></div></div>
-			<div class="field"><label>JDK home</label><div class="row">${pathBox(jdkPath, 'No unified JDK selected')}<button class="button ghost" data-local data-role="unified">Select local…</button></div></div>
+			<div class="field"><label>Project JDK home</label><div class="row">${pathBox(jdkPath, 'No project JDK selected')}<button class="button ghost" data-local data-role="unified">Select local…</button></div></div>
 			<div class="hint ${state.javaJdkReady ? '' : 'warning'}">${jdkHint}</div>
 		</div></section>`;
 	}

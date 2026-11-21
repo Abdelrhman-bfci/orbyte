@@ -40,6 +40,7 @@ interface IEnvironmentViewState {
 	readonly detectedVersions: Readonly<Record<string, string>>;
 	readonly javaJdkPath: string;
 	readonly javaJdkMajor?: number;
+	readonly javaIdeJdkMajor?: number;
 	readonly javaJdkReady: boolean;
 	readonly environments: readonly {
 		readonly id: string;
@@ -53,7 +54,7 @@ interface IEnvironmentViewState {
 }
 
 const environments: readonly ILanguageEnvironment[] = [
-	{ id: 'java', label: 'Java / JVM', shortLabel: 'Java', languageIds: ['java', 'kotlin', 'groovy'], executables: ['java'], versions: ['27', '26', '25'], recommendedVersion: '25', downloadUrl: 'https://adoptium.net/temurin/releases/', memory: 'java' },
+	{ id: 'java', label: 'Java / JVM', shortLabel: 'Java', languageIds: ['java', 'kotlin', 'groovy'], executables: ['java'], versions: ['27', '26', '25', '21', '17', '11', '8'], recommendedVersion: '25', downloadUrl: 'https://adoptium.net/temurin/releases/', memory: 'java' },
 	{ id: 'node', label: 'JavaScript / TypeScript', shortLabel: 'Node.js', languageIds: ['javascript', 'javascriptreact', 'typescript', 'typescriptreact'], executables: ['node'], versions: ['24', '22', '20'], recommendedVersion: '24', downloadUrl: 'https://nodejs.org/en/download', memory: 'node' },
 	{ id: 'python', label: 'Python', shortLabel: 'Python', languageIds: ['python'], executables: ['python3', 'python'], versions: ['3.14', '3.13', '3.12', '3.11', '3.10'], recommendedVersion: '3.13', selectorCommand: 'python.setInterpreter', downloadUrl: 'https://www.python.org/downloads/', memory: 'none' },
 	{ id: 'cpp', label: 'C / C++', shortLabel: 'C/C++', languageIds: ['c', 'cpp', 'cuda-cpp'], executables: ['clang', 'gcc', 'cl'], versions: ['Clang', 'GCC', 'MSVC'], recommendedVersion: 'Clang', selectorCommand: 'C_Cpp.SelectIntelliSenseConfiguration', downloadUrl: 'https://code.visualstudio.com/docs/cpp/config-mingw', memory: 'none' },
@@ -314,13 +315,15 @@ async function buildViewState(selectedId?: string): Promise<IEnvironmentViewStat
 	const totalMemoryGb = Math.round(os.totalmem() / 1024 / 1024 / 1024 * 10) / 10;
 	const javaToolingPath = configuredJavaToolingPath();
 	const javaProjectPath = vscode.workspace.getConfiguration('orbyte.java', configurationResource()).get<string>('jdkHome', '');
-	const javaJdkPath = javaToolingPath || javaProjectPath || detectedPaths.java || '';
+	const javaJdkPath = javaProjectPath || javaToolingPath || detectedPaths.java || '';
 	const javaExecutable = javaJdkPath
 		? resolveJavaExecutable(javaJdkPath)
 		: detectedPaths.java;
 	const javaJdkVersion = javaExecutable ? await executableVersion(javaExecutable) : undefined;
 	const javaJdkMajor = javaJdkVersion ? parseJavaMajor(javaJdkVersion) : undefined;
-	const javaSettingsSynchronized = Boolean(javaToolingPath && javaProjectPath && path.resolve(javaToolingPath) === path.resolve(javaProjectPath));
+	const javaToolingExecutable = javaToolingPath ? resolveJavaExecutable(javaToolingPath) : undefined;
+	const javaToolingVersion = javaToolingExecutable ? await executableVersion(javaToolingExecutable) : undefined;
+	const javaIdeJdkMajor = javaToolingVersion ? parseJavaMajor(javaToolingVersion) : undefined;
 	return {
 		selectedId: environmentByIdOrLanguage(selectedId)?.id ?? detected?.id ?? 'java',
 		detectedId: detected?.id,
@@ -336,7 +339,8 @@ async function buildViewState(selectedId?: string): Promise<IEnvironmentViewStat
 		detectedVersions,
 		javaJdkPath,
 		javaJdkMajor,
-		javaJdkReady: Boolean(javaJdkMajor && javaJdkMajor >= 25 && javaSettingsSynchronized),
+		javaIdeJdkMajor,
+		javaJdkReady: Boolean(javaProjectPath && javaJdkMajor && javaIdeJdkMajor && javaIdeJdkMajor >= 25),
 		environments: environments.map(environment => ({
 			id: environment.id,
 			label: environment.label,
