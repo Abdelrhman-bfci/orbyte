@@ -9,11 +9,10 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 
-const LANGUAGE_SERVER_JDK_VERSION = 25;
+const DEFAULT_PROJECT_JDK_VERSION = 21;
 const JDK_HOME_SETTING = 'jdkHome';
-const LANGUAGE_SERVER_JDK_HOME_SETTING = 'languageServerJdkHome';
 
-type JdkRole = 'unified' | 'languageServer' | 'project';
+type JdkRole = 'unified' | 'project';
 
 interface IJavaRuntimeSetting {
 	readonly name: string;
@@ -40,7 +39,7 @@ export function registerJdkRuntime(context: vscode.ExtensionContext): void {
 	void manager.start();
 }
 
-/** The unified JDK selected for Java tooling and for compiling and running the current project. */
+/** The JDK selected for compiling, running, testing, and debugging the current project. */
 export function configuredJdkEnvironment(resource?: vscode.Uri): Record<string, string> | undefined {
 	const home = vscode.workspace.getConfiguration('orbyte.java', resource).get<string>(JDK_HOME_SETTING)?.trim();
 	if (!home || !isJdkHome(home)) {
@@ -64,9 +63,7 @@ class JdkRuntimeManager implements vscode.Disposable {
 			vscode.window.onDidChangeActiveTextEditor(() => void this.updateStatusBar()),
 			vscode.workspace.onDidChangeWorkspaceFolders(() => void this.updateStatusBar()),
 			vscode.workspace.onDidChangeConfiguration(event => {
-				if (event.affectsConfiguration('orbyte.java')
-					|| event.affectsConfiguration('java.jdt.ls.java.home')
-					|| event.affectsConfiguration('spring-boot.ls.java.home')) {
+				if (event.affectsConfiguration('orbyte.java')) {
 					void this.updateStatusBar();
 				}
 			}),
@@ -96,7 +93,7 @@ class JdkRuntimeManager implements vscode.Disposable {
 		}
 
 		const action = await vscode.window.showWarningMessage(
-			`Java setup is incomplete. Choose the project JDK once and Orbyte will also manage the JDK ${LANGUAGE_SERVER_JDK_VERSION}+ runtime required by its Java tooling.`,
+			'Java setup is incomplete. Choose the JDK used to build, run, test, and debug this project.',
 			'Open Full Setup',
 			'Not Now',
 		);
@@ -109,30 +106,23 @@ class JdkRuntimeManager implements vscode.Disposable {
 		const choice = await vscode.window.showQuickPick([
 			{
 				label: '$(folder-opened) Select an installed JDK',
-				description: `Use one JDK ${LANGUAGE_SERVER_JDK_VERSION}+ for Orbyte tooling and this project`,
+				description: 'Use an installed JDK for this project',
 				action: 'select' as const,
 			},
 			{
-				label: `$(cloud-download) Download Temurin JDK ${LANGUAGE_SERVER_JDK_VERSION}`,
+				label: `$(cloud-download) Download Temurin JDK ${DEFAULT_PROJECT_JDK_VERSION}`,
 				description: process.platform === 'win32' ? 'Install with Windows Package Manager' : 'Open Eclipse Adoptium downloads',
 				action: 'download' as const,
 			},
-			...(vscode.extensions.getExtension('redhat.java') ? [{
-				label: '$(settings-gear) Advanced Java runtime settings',
-				description: 'Open the Red Hat Java runtime manager',
-				action: 'manage' as const,
-			}] : []),
 		], {
 			title: 'Java SDK Setup',
-			placeHolder: 'Configure one JDK for the IDE and project',
+			placeHolder: 'Configure the JDK for this project',
 		});
 
 		if (choice?.action === 'select') {
 			await this.selectLocalJdk('unified', resource);
 		} else if (choice?.action === 'download') {
-			await this.downloadJdk('unified', LANGUAGE_SERVER_JDK_VERSION, resource);
-		} else if (choice?.action === 'manage') {
-			await vscode.commands.executeCommand('java.runtimes.add');
+			await this.downloadJdk('unified', DEFAULT_PROJECT_JDK_VERSION, resource);
 		}
 	}
 
@@ -142,11 +132,7 @@ class JdkRuntimeManager implements vscode.Disposable {
 			canSelectFolders: true,
 			canSelectMany: false,
 			openLabel: 'Use this JDK',
-			title: role === 'unified'
-				? 'Select the project JDK (Java 8 or newer)'
-				: role === 'languageServer'
-					? `Select JDK ${LANGUAGE_SERVER_JDK_VERSION} or newer for Java tooling`
-					: 'Select the JDK for this project',
+			title: 'Select the project JDK (Java 8 or newer)',
 		});
 		if (!selection?.[0]) {
 			return;
@@ -223,62 +209,19 @@ class JdkRuntimeManager implements vscode.Disposable {
 			return;
 		}
 		if (role === 'unified') {
-			if (version < LANGUAGE_SERVER_JDK_VERSION) {
-				await this.configureProjectJdk(home, version, resource, false);
-				await recordPreferredJdkVersion(version, resource);
-				if (await hasLanguageServerJdk()) {
-					const toolingVersion = await detectedLanguageServerJdkVersion();
-					void vscode.window.showInformationMessage(`Project JDK ${version} is ready. Orbyte continues using JDK ${toolingVersion} for Java tooling.`);
-				} else {
-					const action = await vscode.window.showWarningMessage(
-						`Project JDK ${version} is configured. Orbyte also needs JDK ${LANGUAGE_SERVER_JDK_VERSION}+ to run the Java extensions.`,
-						`Download JDK ${LANGUAGE_SERVER_JDK_VERSION}`,
-					);
-					if (action === `Download JDK ${LANGUAGE_SERVER_JDK_VERSION}`) {
-						await this.downloadJdk('languageServer', LANGUAGE_SERVER_JDK_VERSION, resource);
-					}
-				}
-				await this.updateStatusBar();
-				return;
-			}
-			await this.configureLanguageServerJdk(home, version, false);
 			await this.configureProjectJdk(home, version, resource, false);
 			await recordPreferredJdkVersion(version, resource);
 			const action = await vscode.window.showInformationMessage(
-				`JDK ${version} is now configured for both Orbyte Java tooling and this project. Reload Orbyte to activate it everywhere.`,
-				'Reload Now',
+				`Project JDK ${version} is ready for build, run, test, and debug.`,
+				'Restart Java',
 			);
-			if (action === 'Reload Now') {
-				await vscode.commands.executeCommand('workbench.action.reloadWindow');
+			if (action === 'Restart Java' && vscode.extensions.getExtension('redhat.java')) {
+				await vscode.commands.executeCommand('java.server.restart');
 			}
-		} else if (role === 'languageServer') {
-			if (version < LANGUAGE_SERVER_JDK_VERSION) {
-				void vscode.window.showErrorMessage(`JDK ${version} cannot run the current Java extensions. Select JDK ${LANGUAGE_SERVER_JDK_VERSION} or newer. Your project may still use JDK ${version} separately.`);
-				return;
-			}
-			await this.configureLanguageServerJdk(home, version);
 		} else {
 			await this.configureProjectJdk(home, version, resource);
 		}
 		await this.updateStatusBar();
-	}
-
-	private async configureLanguageServerJdk(home: string, version: number, notify = true): Promise<void> {
-		await vscode.workspace.getConfiguration('orbyte.java').update(LANGUAGE_SERVER_JDK_HOME_SETTING, home, vscode.ConfigurationTarget.Global);
-		await vscode.workspace.getConfiguration().update('java.jdt.ls.java.home', home, vscode.ConfigurationTarget.Global);
-		await vscode.workspace.getConfiguration().update('spring-boot.ls.java.home', home, vscode.ConfigurationTarget.Global);
-		await vscode.workspace.getConfiguration().update('rsp-ui.rsp.java.home', home, vscode.ConfigurationTarget.Global);
-
-		if (!notify) {
-			return;
-		}
-		const action = await vscode.window.showInformationMessage(
-			`JDK ${version} is configured for Java, Spring Boot, and application-server tooling. Reload Orbyte to activate it.`,
-			'Reload Now',
-		);
-		if (action === 'Reload Now') {
-			await vscode.commands.executeCommand('workbench.action.reloadWindow');
-		}
 	}
 
 	private async configureProjectJdk(home: string, version: number, resource = configurationResource(), notify = true): Promise<void> {
@@ -312,62 +255,25 @@ class JdkRuntimeManager implements vscode.Disposable {
 			this.statusBar.hide();
 			return;
 		}
-		const toolingVersion = await detectedLanguageServerJdkVersion();
 		const projectHome = configuredJdkEnvironment(configurationResource())?.JAVA_HOME;
 		const projectVersion = projectHome ? await readJavaMajor(projectHome) : undefined;
 		const ready = await hasManagedJdkConfiguration();
-		if (!toolingVersion || toolingVersion < LANGUAGE_SERVER_JDK_VERSION || !ready) {
+		if (!ready || !projectVersion) {
 			this.statusBar.text = '$(warning) Java SDK Setup';
-			this.statusBar.tooltip = `Select one JDK ${LANGUAGE_SERVER_JDK_VERSION} or newer for both Orbyte Java tooling and this project.`;
+			this.statusBar.tooltip = 'Select the JDK used to build, run, test, and debug this project.';
 			this.statusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
 		} else {
-			this.statusBar.text = `$(coffee) Java ${projectVersion}${projectVersion !== toolingVersion ? ` · IDE ${toolingVersion}` : ''}`;
-			this.statusBar.tooltip = 'Java is ready. One setup manages the project JDK and Orbyte tooling runtime.';
+			this.statusBar.text = `$(coffee) Java ${projectVersion}`;
+			this.statusBar.tooltip = `Project JDK ${projectVersion} is ready for build, run, test, and debug.`;
 			this.statusBar.backgroundColor = undefined;
 		}
 		this.statusBar.show();
 	}
 }
 
-function configuredLanguageServerJdkHome(): string | undefined {
-	const candidates = [
-		vscode.workspace.getConfiguration('orbyte.java').get<string>(LANGUAGE_SERVER_JDK_HOME_SETTING),
-		vscode.workspace.getConfiguration().get<string>('java.jdt.ls.java.home'),
-		vscode.workspace.getConfiguration().get<string>('spring-boot.ls.java.home'),
-	];
-	return candidates.map(candidate => candidate?.trim()).find((candidate): candidate is string => Boolean(candidate && isJdkHome(candidate)));
-}
-
-async function detectedLanguageServerJdkVersion(): Promise<number | undefined> {
-	const configured = configuredLanguageServerJdkHome();
-	if (configured) {
-		return readJavaMajor(configured);
-	}
-	if (process.env.JAVA_HOME && isJdkHome(process.env.JAVA_HOME)) {
-		const version = await readJavaMajor(process.env.JAVA_HOME);
-		if (version) {
-			return version;
-		}
-	}
-	try {
-		const output = await run(process.platform === 'win32' ? 'java.exe' : 'java', ['-version']);
-		return parseJavaMajor(output);
-	} catch {
-		return undefined;
-	}
-}
-
-async function hasLanguageServerJdk(): Promise<boolean> {
-	const version = await detectedLanguageServerJdkVersion();
-	return Boolean(version && version >= LANGUAGE_SERVER_JDK_VERSION);
-}
-
 async function hasManagedJdkConfiguration(resource = configurationResource()): Promise<boolean> {
 	const projectHome = configuredJdkEnvironment(resource)?.JAVA_HOME;
-	if (!projectHome) {
-		return false;
-	}
-	return hasLanguageServerJdk();
+	return Boolean(projectHome);
 }
 
 async function recordPreferredJdkVersion(version: number, resource = configurationResource()): Promise<void> {
@@ -426,7 +332,6 @@ export async function findInstalledJdks(force = false): Promise<readonly IInstal
 	}
 	const candidates = new Set<string>();
 	for (const candidate of [
-		configuredLanguageServerJdkHome(),
 		configuredJdkEnvironment(configurationResource())?.JAVA_HOME,
 		process.env.JAVA_HOME,
 	]) {

@@ -309,7 +309,7 @@ export function fromGithub({ name, version, repo, sha256, metadata }: IExtension
 		.pipe(rename(p => p.dirname = p.dirname!.replace(/^extension\/?/, '')))
 		.pipe(packageJsonFilter)
 		.pipe(buffer())
-		.pipe(jsonEditor({ __metadata: metadata }))
+		.pipe(jsonEditor({ __metadata: { ...metadata, ...(asset ? { orbytePlatformAsset: asset.assetName } : {}) } }))
 		.pipe(packageJsonFilter.restore);
 }
 

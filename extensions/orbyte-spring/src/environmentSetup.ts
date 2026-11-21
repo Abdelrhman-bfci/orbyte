@@ -41,9 +41,6 @@ interface IEnvironmentViewState {
 	readonly detectedVersions: Readonly<Record<string, string>>;
 	readonly javaJdkPath: string;
 	readonly javaJdkMajor?: number;
-	readonly javaIdeJdkMajor?: number;
-	readonly javaProjectJdkReady: boolean;
-	readonly javaIdeJdkReady: boolean;
 	readonly javaJdkReady: boolean;
 	readonly javaInstalledJdks: readonly { readonly version: number; readonly path: string }[];
 	readonly environments: readonly {
@@ -58,7 +55,7 @@ interface IEnvironmentViewState {
 }
 
 const environments: readonly ILanguageEnvironment[] = [
-	{ id: 'java', label: 'Java / JVM', shortLabel: 'Java', languageIds: ['java', 'kotlin', 'groovy'], executables: ['java'], versions: ['27', '26', '25', '21', '17', '11', '8'], recommendedVersion: '25', downloadUrl: 'https://adoptium.net/temurin/releases/', memory: 'java' },
+	{ id: 'java', label: 'Java / JVM', shortLabel: 'Java', languageIds: ['java', 'kotlin', 'groovy'], executables: ['java'], versions: ['27', '26', '25', '21', '17', '11', '8'], recommendedVersion: '21', downloadUrl: 'https://adoptium.net/temurin/releases/', memory: 'java' },
 	{ id: 'node', label: 'JavaScript / TypeScript', shortLabel: 'Node.js', languageIds: ['javascript', 'javascriptreact', 'typescript', 'typescriptreact'], executables: ['node'], versions: ['24', '22', '20'], recommendedVersion: '24', downloadUrl: 'https://nodejs.org/en/download', memory: 'node' },
 	{ id: 'python', label: 'Python', shortLabel: 'Python', languageIds: ['python'], executables: ['python3', 'python'], versions: ['3.14', '3.13', '3.12', '3.11', '3.10'], recommendedVersion: '3.13', selectorCommand: 'python.setInterpreter', downloadUrl: 'https://www.python.org/downloads/', memory: 'none' },
 	{ id: 'cpp', label: 'C / C++', shortLabel: 'C/C++', languageIds: ['c', 'cpp', 'cuda-cpp'], executables: ['clang', 'gcc', 'cl'], versions: ['Clang', 'GCC', 'MSVC'], recommendedVersion: 'Clang', selectorCommand: 'C_Cpp.SelectIntelliSenseConfiguration', downloadUrl: 'https://code.visualstudio.com/docs/cpp/config-mingw', memory: 'none' },
@@ -175,8 +172,6 @@ class EnvironmentSetupManager implements vscode.Disposable {
 					throw new Error('Select a valid JDK version.');
 				}
 				await vscode.commands.executeCommand('orbyte.java.useOrDownloadJdkInternal', 'unified', version);
-			} else if (payload.type === 'setupJavaTooling' && environment.id === 'java') {
-				await vscode.commands.executeCommand('orbyte.java.useOrDownloadJdkInternal', 'languageServer', 25);
 			} else if (payload.type === 'apply') {
 				await this.applyForm(environment, payload);
 			} else if (payload.type === 'openSelector' && environment.selectorCommand) {
@@ -326,20 +321,17 @@ async function buildViewState(selectedId?: string): Promise<IEnvironmentViewStat
 	}
 	const totalMemoryGb = Math.round(os.totalmem() / 1024 / 1024 / 1024 * 10) / 10;
 	const javaInstalledJdks = await findInstalledJdks();
-	const javaToolingPath = configuredJavaToolingPath();
 	const javaProjectPath = vscode.workspace.getConfiguration('orbyte.java', configurationResource()).get<string>('jdkHome', '');
 	const preferredJavaVersion = Number(configuration.get<Record<string, string>>('preferredVersions', {}).java);
 	const preferredInstalledJdk = javaInstalledJdks.find(jdk => jdk.version === preferredJavaVersion) ?? javaInstalledJdks[0];
 	const configuredProjectHome = isJavaHomeDirectory(javaProjectPath) ? javaProjectPath : '';
-	const javaJdkPath = configuredProjectHome || preferredInstalledJdk?.path || javaToolingPath || detectedPaths.java || '';
+	const javaJdkPath = configuredProjectHome || preferredInstalledJdk?.path || detectedPaths.java || '';
 	const javaExecutable = javaJdkPath
 		? resolveJavaExecutable(javaJdkPath)
 		: detectedPaths.java;
 	const javaJdkVersion = javaExecutable ? await executableVersion(javaExecutable) : undefined;
 	const javaJdkMajor = javaJdkVersion ? parseJavaMajor(javaJdkVersion) : undefined;
-	const javaToolingExecutable = javaToolingPath ? resolveJavaExecutable(javaToolingPath) : undefined;
-	const javaToolingVersion = javaToolingExecutable ? await executableVersion(javaToolingExecutable) : undefined;
-	const javaIdeJdkMajor = javaToolingVersion ? parseJavaMajor(javaToolingVersion) : undefined;
+	const javaJdkReady = Boolean(configuredProjectHome && javaJdkMajor);
 	return {
 		selectedId: environmentByIdOrLanguage(selectedId)?.id ?? detected?.id ?? 'java',
 		detectedId: detected?.id,
@@ -355,10 +347,7 @@ async function buildViewState(selectedId?: string): Promise<IEnvironmentViewStat
 		detectedVersions,
 		javaJdkPath,
 		javaJdkMajor,
-		javaIdeJdkMajor,
-		javaProjectJdkReady: Boolean(configuredProjectHome && javaJdkMajor),
-		javaIdeJdkReady: Boolean(javaIdeJdkMajor && javaIdeJdkMajor >= 25),
-		javaJdkReady: Boolean(configuredProjectHome && javaJdkMajor && javaIdeJdkMajor && javaIdeJdkMajor >= 25),
+		javaJdkReady,
 		javaInstalledJdks,
 		environments: environments.map(environment => ({
 			id: environment.id,
@@ -374,13 +363,6 @@ async function buildViewState(selectedId?: string): Promise<IEnvironmentViewStat
 
 function environmentByIdOrLanguage(value?: string): ILanguageEnvironment | undefined {
 	return environments.find(environment => environment.id === value || environment.languageIds.includes(value ?? ''));
-}
-
-function configuredJavaToolingPath(): string {
-	const settings = vscode.workspace.getConfiguration();
-	return vscode.workspace.getConfiguration('orbyte.java').get<string>('languageServerJdkHome', '')
-		|| settings.get<string>('java.jdt.ls.java.home', '')
-		|| settings.get<string>('spring-boot.ls.java.home', '');
 }
 
 function resolveJavaExecutable(homeOrExecutable: string): string | undefined {

@@ -24,11 +24,12 @@ export interface IExtensionDefinition {
 	platforms?: string[];
 	vsix?: string;
 	/**
-	 * Per-target checksums for a platform-specific extension published to a GitHub release.
+	 * Per-target release assets for a platform-specific extension published to GitHub.
 	 * Keyed by marketplace target platform (e.g. `win32-x64`, `linux-armhf`, `alpine-x64`).
-	 * The matching release asset is resolved by convention as `<name>-<osAlias>-<arch>.vsix`.
+	 * A checksum string resolves the asset by convention as `<name>-<osAlias>-<arch>.vsix`;
+	 * repositories with different names can provide an explicit asset name and checksum.
 	 */
-	platformSpecific?: { [target: string]: string };
+	platformSpecific?: { [target: string]: string | { asset: string; sha256: string } };
 	metadata: {
 		id: string;
 		publisherId: {
@@ -68,8 +69,15 @@ function isUpToDate(extension: IExtensionDefinition): boolean {
 	const packageContents = fs.readFileSync(packagePath, { encoding: 'utf8' });
 
 	try {
-		const diskVersion = JSON.parse(packageContents).version;
-		return (diskVersion === extension.version);
+		const packageJson = JSON.parse(packageContents);
+		if (packageJson.version !== extension.version) {
+			return false;
+		}
+		if (extension.platformSpecific) {
+			const asset = resolvePlatformSpecificAsset(extension);
+			return packageJson.__metadata?.orbytePlatformAsset === asset?.assetName;
+		}
+		return true;
 	} catch (err) {
 		return false;
 	}
@@ -111,14 +119,16 @@ function resolvePlatformSpecificAsset(extension: IExtensionDefinition): { assetN
 		return undefined;
 	}
 
-	const sha256 = extension.platformSpecific![target];
-	if (!sha256) {
+	const definition = extension.platformSpecific![target];
+	if (!definition) {
 		// The extension declares platform-specific assets but is missing one for this known target.
 		// This is a configuration error, so fail loudly.
 		throw new Error(`Built-in extension '${extension.name}' is platform-specific but has no asset for target '${target}'. Available targets: [${Object.keys(extension.platformSpecific!)}]`);
 	}
 
-	return { assetName: getPlatformSpecificAssetName(extension.name, target), sha256 };
+	return typeof definition === 'string'
+		? { assetName: getPlatformSpecificAssetName(extension.name, target), sha256: definition }
+		: { assetName: definition.asset, sha256: definition.sha256 };
 }
 
 export function getExtensionStream(extension: IExtensionDefinition) {

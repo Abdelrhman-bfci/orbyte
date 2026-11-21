@@ -98,6 +98,17 @@
 			"version": "1.58.0",
 			"sha256": "d0118ef167d598343808bccf3ea54e248d2a1ab297dc02e00b26e7ebec9d0cc4",
 			"repo": "https://github.com/redhat-developer/vscode-java",
+			"platformSpecific": {
+				"darwin-arm64": { "asset": "java-darwin-arm64-1.58.0-1114.vsix", "sha256": "8783b3331d6b35e8ae80833e76974edbca2fa5f3a9d9943b598680087d2b24e8" },
+				"darwin-x64": { "asset": "java-darwin-x64-1.58.0-1114.vsix", "sha256": "70cacdf22f728be69278fdbc67af0b7ca8b668c2c9f899f0e944a6943ca1dfd3" },
+				"linux-arm64": { "asset": "java-linux-arm64-1.58.0-1114.vsix", "sha256": "09e2fa38e2f28304bcb530d46cf17a7996b904b981acb04cef9356f42acf4c61" },
+				"linux-x64": { "asset": "java-linux-x64-1.58.0-1114.vsix", "sha256": "45049a2273c78814287fb31a45255e5ce1fdbe34161bb9f1ba8f62a6aa84bdfc" },
+				"win32-arm64": { "asset": "java-win32-arm64-1.58.0-1114.vsix", "sha256": "ae5074e839ddd9b929df963c3564d1bb1cc71a8f44ddca95255334cba9c1dbb7" },
+				"win32-x64": { "asset": "java-win32-x64-1.58.0-1114.vsix", "sha256": "e23746b65468243ea54a7c7ad0a41ff4202196cf642cd9e6fa275234c33cdacd" },
+				"linux-armhf": { "asset": "vscode-java-1.58.0-1114.vsix", "sha256": "d0118ef167d598343808bccf3ea54e248d2a1ab297dc02e00b26e7ebec9d0cc4" },
+				"alpine-arm64": { "asset": "vscode-java-1.58.0-1114.vsix", "sha256": "d0118ef167d598343808bccf3ea54e248d2a1ab297dc02e00b26e7ebec9d0cc4" },
+				"alpine-x64": { "asset": "vscode-java-1.58.0-1114.vsix", "sha256": "d0118ef167d598343808bccf3ea54e248d2a1ab297dc02e00b26e7ebec9d0cc4" }
+			},
 			"metadata": {
 				"id": "redhat.java",
 				"publisherId": { "publisherId": "redhat", "publisherName": "redhat", "displayName": "Red Hat", "flags": "verified" },
