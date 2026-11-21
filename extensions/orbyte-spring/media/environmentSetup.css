@@ -45,6 +45,7 @@ button { cursor: pointer; }
 .content-header p { margin: 6px 0 0; color: var(--vscode-descriptionForeground); }
 .status { padding: 7px 11px; border-radius: 999px; border: 1px solid; white-space: nowrap; }
 .status.ready { color: #71dca5; border-color: rgba(113,220,165,.4); background: rgba(57,151,102,.12); }
+.status.partial { color: #6ed7e7; border-color: rgba(76,205,223,.4); background: rgba(41,151,170,.12); }
 .status.missing { color: #ffca68; border-color: rgba(255,202,104,.4); background: rgba(184,121,34,.12); }
 
 .grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 16px; }

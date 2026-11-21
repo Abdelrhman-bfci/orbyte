@@ -42,6 +42,8 @@ interface IEnvironmentViewState {
 	readonly javaJdkPath: string;
 	readonly javaJdkMajor?: number;
 	readonly javaIdeJdkMajor?: number;
+	readonly javaProjectJdkReady: boolean;
+	readonly javaIdeJdkReady: boolean;
 	readonly javaJdkReady: boolean;
 	readonly javaInstalledJdks: readonly { readonly version: number; readonly path: string }[];
 	readonly environments: readonly {
@@ -173,6 +175,8 @@ class EnvironmentSetupManager implements vscode.Disposable {
 					throw new Error('Select a valid JDK version.');
 				}
 				await vscode.commands.executeCommand('orbyte.java.useOrDownloadJdkInternal', 'unified', version);
+			} else if (payload.type === 'setupJavaTooling' && environment.id === 'java') {
+				await vscode.commands.executeCommand('orbyte.java.useOrDownloadJdkInternal', 'languageServer', 25);
 			} else if (payload.type === 'apply') {
 				await this.applyForm(environment, payload);
 			} else if (payload.type === 'openSelector' && environment.selectorCommand) {
@@ -352,6 +356,8 @@ async function buildViewState(selectedId?: string): Promise<IEnvironmentViewStat
 		javaJdkPath,
 		javaJdkMajor,
 		javaIdeJdkMajor,
+		javaProjectJdkReady: Boolean(configuredProjectHome && javaJdkMajor),
+		javaIdeJdkReady: Boolean(javaIdeJdkMajor && javaIdeJdkMajor >= 25),
 		javaJdkReady: Boolean(configuredProjectHome && javaJdkMajor && javaIdeJdkMajor && javaIdeJdkMajor >= 25),
 		javaInstalledJdks,
 		environments: environments.map(environment => ({

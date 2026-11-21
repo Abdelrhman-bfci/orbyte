@@ -21,6 +21,14 @@
 		const heapAuto = !heap;
 		const isJava = environment.id === 'java';
 		const ready = isJava ? state.javaJdkReady : Boolean(effectivePath);
+		const statusClass = ready ? 'ready' : isJava && (state.javaProjectJdkReady || state.javaIdeJdkReady) ? 'partial' : 'missing';
+		const statusLabel = isJava
+			? state.javaJdkReady
+				? '● Java ready'
+				: state.javaProjectJdkReady
+					? '◐ IDE JDK required'
+					: state.javaJdkMajor ? '◐ Select project JDK' : '○ Setup required'
+			: ready ? '● Runtime detected' : '○ Setup required';
 
 		root.innerHTML = `
 		<div class="shell">
@@ -34,7 +42,7 @@
 						<span class="glyph">${glyph(item.id)}</span><span class="copy"><strong>${escapeHtml(item.label)}</strong><small>${item.id === state.detectedId ? 'Detected project' : 'Environment'}</small></span>${item.id === state.detectedId ? '<span class="detected-dot"></span>' : ''}
 					</button>`).join('')}</div></aside>
 				<main class="content">
-					<div class="content-header"><div><h2>${escapeHtml(environment.label)}</h2><p>Configure everything required by this language without leaving this window.</p></div><span class="status ${ready ? 'ready' : 'missing'}">${ready ? '● Runtime detected' : '○ Setup required'}</span></div>
+					<div class="content-header"><div><h2>${escapeHtml(environment.label)}</h2><p>Configure everything required by this language without leaving this window.</p></div><span class="status ${statusClass}">${statusLabel}</span></div>
 					<div class="grid">
 						${isJava ? javaCards(environment, preferredVersion, detectedPath) : runtimeCard(environment, preferredVersion, effectivePath, detectedVersion)}
 						${memoryCard(environment, heapAuto, heap)}
@@ -78,14 +86,17 @@
 			? state.javaJdkMajor < 25
 				? `Project JDK ${escapeHtml(state.javaJdkMajor)} is ready. Orbyte automatically keeps JDK ${escapeHtml(state.javaIdeJdkMajor)} for compatible IDE tooling.`
 				: `JDK ${escapeHtml(state.javaJdkMajor)} is configured for both Orbyte tooling and this project.`
-			: state.javaJdkMajor
-				? `Project JDK ${escapeHtml(state.javaJdkMajor)} was detected. Finish setup so Orbyte can provide JDK 25+ for the Java extensions.`
+			: state.javaProjectJdkReady
+				? `Project JDK ${escapeHtml(state.javaJdkMajor)} is ready. Only the JDK 25+ runtime required by the Java extensions is missing.`
+				: state.javaJdkMajor
+				? `JDK ${escapeHtml(state.javaJdkMajor)} is installed but is not selected for this project yet. Click Use installed.`
 				: 'Choose Java 8 or newer for the project. Orbyte automatically keeps JDK 25+ for its Java extensions.';
 		return `
 		<section class="card full"><div class="card-head"><h3>Java Development Kit</h3><p>One setup controls the project JDK and keeps Orbyte's Java tooling on a compatible JDK automatically.</p></div><div class="card-body">
 			<div class="field"><label>JDK version</label><div class="row"><select id="version">${javaVersionOptions(environment, jdkVersion)}</select><button class="button secondary" id="jdkAction">${installed ? 'Use installed' : 'Download selected'}</button></div><div class="hint" id="jdkAvailability">${installed ? `Installed at ${escapeHtml(installed.path)}` : `JDK ${escapeHtml(jdkVersion)} is not installed yet.`}</div></div>
 			<div class="field"><label>Project JDK home</label><div class="row">${pathBox(jdkPath, 'No project JDK selected')}<button class="button ghost" data-local data-role="unified">Select local…</button></div></div>
 			<div class="hint ${state.javaJdkReady ? '' : 'warning'}">${jdkHint}</div>
+			${state.javaProjectJdkReady && !state.javaIdeJdkReady ? '<div><button class="button secondary" id="setupJavaTooling">Set up IDE JDK 25</button></div>' : ''}
 		</div></section>`;
 	}
 
@@ -133,6 +144,7 @@
 			versionField.addEventListener('change', refreshJdkAction);
 			jdkAction.addEventListener('click', () => vscode.postMessage({ type: 'useJdkVersion', languageId: environment.id, version: versionField.value }));
 		}
+		document.getElementById('setupJavaTooling')?.addEventListener('click', () => vscode.postMessage({ type: 'setupJavaTooling', languageId: environment.id }));
 		const heapAuto = document.getElementById('heapAuto');
 		if (heapAuto) { heapAuto.addEventListener('change', () => document.querySelector('.memory-input').classList.toggle('disabled', heapAuto.checked)); }
 		document.getElementById('selector')?.addEventListener('click', () => vscode.postMessage({ type: 'openSelector', languageId: environment.id }));
