@@ -38,6 +38,18 @@ function Get-OrbyteSha256Checksum {
 	}
 }
 
+function Expand-OrbyteZipArchive {
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$Path,
+		[Parameter(Mandatory = $true)]
+		[string]$DestinationPath
+	)
+
+	Add-Type -AssemblyName System.IO.Compression.FileSystem
+	[System.IO.Compression.ZipFile]::ExtractToDirectory($Path, $DestinationPath)
+}
+
 try {
 	New-Item -ItemType Directory -Force -Path $TemporaryRoot, $Extracted, $Target | Out-Null
 	Write-Host "[Orbyte] Downloading llama.cpp $Version runtime for Windows $Architecture..."
@@ -47,7 +59,7 @@ try {
 		throw "llama.cpp archive checksum mismatch. Expected $($Checksums[$Architecture]), received $ActualChecksum."
 	}
 
-	Expand-Archive -LiteralPath $Archive -DestinationPath $Extracted -Force
+	Expand-OrbyteZipArchive -Path $Archive -DestinationPath $Extracted
 	Copy-Item -Force (Join-Path $Extracted 'llama-server.exe') $Target
 	Get-ChildItem -LiteralPath $Extracted -Filter '*.dll' -File | Copy-Item -Destination $Target -Force
 	$OpenMpLicense = Join-Path $Extracted 'LICENSE-LLVM-OpenMP'
