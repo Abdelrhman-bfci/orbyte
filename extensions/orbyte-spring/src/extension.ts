@@ -9,6 +9,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import * as yauzl from 'yauzl';
 import { registerEnterpriseRuntime } from './enterpriseRuntime';
+import { registerEnvironmentSetup } from './environmentSetup';
 import { registerJdkRuntime } from './jdkRuntime';
 import { registerProjectRuntime } from './projectRuntime';
 
@@ -56,6 +57,7 @@ const fallbackMetadata: IInitializrMetadata = {
 
 export function activate(context: vscode.ExtensionContext): void {
 	context.subscriptions.push(vscode.commands.registerCommand('orbyte.spring.createProject', () => showSpringProjectWizard()));
+	registerEnvironmentSetup(context);
 	registerJdkRuntime(context);
 	registerProjectRuntime(context);
 	registerEnterpriseRuntime(context);

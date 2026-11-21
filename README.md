@@ -118,11 +118,23 @@ Orbyte bundles Java language support, the Java debugger, Maven, Gradle, and Spri
 - Ant projects from `build.xml`, including common run, build, and test targets.
 - Nested projects in multi-root workspaces.
 
-Open a Java project and Orbyte checks for a complete JDK automatically. If one
-is missing, choose an existing JDK directory or let Orbyte install Eclipse
-Temurin JDK 21 with WinGet on Windows. You can change it later with
-**Orbyte: Configure Project JDK**; the selected JDK is applied to build, run,
-test, and debug actions for that workspace.
+Open a Java project and Orbyte checks two independent Java runtimes. The current
+Java, Spring Boot, and application-server extensions require **JDK 25 or newer**
+to run inside the IDE. The project itself can still compile and run with JDK 8,
+11, 17, 21, 25, or another compatible version. Use the always-visible
+**Java SDK Setup** button to select local JDKs or install Eclipse Temurin with
+WinGet on Windows. Orbyte configures `java.jdt.ls.java.home`,
+`spring-boot.ls.java.home`, and the project `java.configuration.runtimes`
+separately, then offers to reload the window when the tooling JDK changes.
+
+The **Environment Setup** button in the main title bar detects the active
+programming language and opens the relevant setup flow for Java/JVM,
+JavaScript/TypeScript, Python, C/C++, .NET, Go, Rust, PHP, or Ruby. It can select
+an SDK, runtime, interpreter, or compiler; open the official installer; and
+configure supported language-server heap limits. A matching setup button also
+appears in the editor title, and missing required tools produce a direct setup
+prompt instead of a generic activation failure. The **Orbyte Home** button next
+to it reopens the Welcome workspace dashboard at any time.
 
 The Spring Boot main class shows **Run Spring Boot** and **Debug Spring Boot** actions above the class. The editor title and Explorer context menu also provide Run, Debug, Build, and Test. Debug launches the Java debugger with breakpoints, stepping, variables, watches, and the debug console; it does not require a hand-written `launch.json`.
 

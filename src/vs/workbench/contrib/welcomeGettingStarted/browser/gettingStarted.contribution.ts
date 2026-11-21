@@ -31,6 +31,7 @@ import { Categories } from '../../../../platform/action/common/actionCommonCateg
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { AccessibleViewRegistry } from '../../../../platform/accessibility/browser/accessibleViewRegistry.js';
 import { GettingStartedAccessibleView } from './gettingStartedAccessibleView.js';
+import { Codicon } from '../../../../base/common/codicons.js';
 
 export * as icons from './gettingStartedIcons.js';
 
@@ -38,16 +39,24 @@ registerAction2(class extends Action2 {
 	constructor() {
 		super({
 			id: 'workbench.action.openWalkthrough',
-			title: localize2('miWelcome', 'Welcome'),
+			title: localize2('miWelcome', 'Orbyte Home'),
+			icon: Codicon.home,
 			category: Categories.Help,
 			f1: true,
-			menu: {
-				id: MenuId.MenubarHelpMenu,
-				group: '1_welcome',
-				order: 1,
-			},
+			menu: [
+				{
+					id: MenuId.MenubarHelpMenu,
+					group: '1_welcome',
+					order: 1,
+				},
+				{
+					id: MenuId.CommandCenter,
+					group: 'navigation',
+					order: 0.25,
+				},
+			],
 			metadata: {
-				description: localize2('minWelcomeDescription', 'Opens a Walkthrough to help you get started in VS Code.')
+				description: localize2('minWelcomeDescription', 'Opens the Orbyte workspace home and task dashboard.')
 			}
 		});
 	}
@@ -99,6 +108,30 @@ registerAction2(class extends Action2 {
 				options: { preserveFocus: toSide ?? false, inactive }
 			}, toSide ? SIDE_GROUP : undefined);
 		}
+	}
+});
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: 'workbench.action.orbyteEnvironmentSetup',
+			title: localize2('orbyteEnvironmentSetup', 'Environment Setup'),
+			icon: Codicon.tools,
+			category: Categories.Preferences,
+			f1: true,
+			menu: {
+				id: MenuId.CommandCenter,
+				group: 'navigation',
+				order: 0.5,
+			},
+			metadata: {
+				description: localize2('orbyteEnvironmentSetupDescription', 'Detect and configure the runtime, SDK, compiler, interpreter, and memory settings for the active programming language.')
+			}
+		});
+	}
+
+	public run(accessor: ServicesAccessor): Promise<unknown> {
+		return accessor.get(ICommandService).executeCommand('orbyte.environment.configure');
 	}
 });
 

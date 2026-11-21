@@ -9,6 +9,8 @@
   "categories": ["Programming Languages", "Debuggers", "Other"],
   "activationEvents": [
     "onCommand:orbyte.spring.createProject",
+    "onCommand:orbyte.environment.configure",
+    "onStartupFinished",
     "onLanguage:java",
     "onLanguage:kotlin",
     "onLanguage:groovy",
@@ -40,7 +42,8 @@
       { "command": "orbyte.spring.test", "title": "Test Detected Java Project", "category": "Orbyte", "icon": "$(beaker)" },
       { "command": "orbyte.spring.showProjectActions", "title": "Show Java Project Actions", "category": "Orbyte" },
       { "command": "orbyte.spring.refreshProjects", "title": "Refresh Java Project Detection", "category": "Orbyte", "icon": "$(refresh)" },
-      { "command": "orbyte.java.configureJdk", "title": "Configure Project JDK…", "category": "Orbyte", "icon": "$(coffee)" },
+      { "command": "orbyte.environment.configure", "title": "Language Environment Setup…", "category": "Orbyte", "icon": "$(tools)" },
+      { "command": "orbyte.java.configureJdk", "title": "Java SDK Setup…", "category": "Orbyte", "icon": "$(coffee)" },
       { "command": "orbyte.enterprise.configureServer", "title": "Add Application Server…", "category": "Orbyte", "icon": "$(add)" },
       { "command": "orbyte.enterprise.refreshServers", "title": "Refresh Application Servers", "category": "Orbyte", "icon": "$(refresh)" },
       { "command": "orbyte.enterprise.startServer", "title": "Start Application Server", "category": "Orbyte", "icon": "$(play)" },
@@ -54,6 +57,8 @@
         { "command": "orbyte.spring.createProject", "group": "project@1" }
       ],
       "editor/title": [
+        { "command": "orbyte.environment.configure", "when": "resourceLangId == javascript || resourceLangId == javascriptreact || resourceLangId == typescript || resourceLangId == typescriptreact || resourceLangId == python || resourceLangId == c || resourceLangId == cpp || resourceLangId == csharp || resourceLangId == fsharp || resourceLangId == go || resourceLangId == rust || resourceLangId == php || resourceLangId == ruby", "group": "navigation@0" },
+        { "command": "orbyte.java.configureJdk", "when": "resourceLangId == java || resourceLangId == kotlin || resourceLangId == groovy", "group": "navigation@0" },
         { "command": "orbyte.spring.run", "when": "resourceLangId == java && orbyte.spring.projectDetected && !orbyte.spring.activeProjectRunning", "group": "navigation@1" },
         { "command": "orbyte.spring.debug", "when": "resourceLangId == java && orbyte.spring.projectDetected && !orbyte.spring.activeProjectRunning", "group": "navigation@2" },
         { "command": "orbyte.spring.stop", "when": "resourceLangId == java && orbyte.spring.activeProjectRunning", "group": "navigation@1" },
@@ -68,6 +73,7 @@
         { "command": "orbyte.spring.test", "when": "orbyte.spring.projectDetected", "group": "orbyte@4" }
       ],
       "commandPalette": [
+        { "command": "orbyte.environment.configure" },
         { "command": "orbyte.spring.createProject" },
         { "command": "orbyte.spring.run", "when": "orbyte.spring.projectDetected" },
         { "command": "orbyte.spring.debug", "when": "orbyte.spring.projectDetected" },
@@ -121,6 +127,9 @@
         "orbyte.java.autoDetect": { "type": "boolean", "default": true, "description": "Automatically detect Spring Boot, Maven, Gradle, Ant, and Java application projects." },
         "orbyte.java.showStatusBar": { "type": "boolean", "default": true, "description": "Show the detected Java framework and build tool in the status bar." },
         "orbyte.java.jdkHome": { "type": "string", "default": "", "scope": "resource", "description": "JDK home used by Orbyte Java build, run, test, and debug actions." },
+        "orbyte.java.languageServerJdkHome": { "type": "string", "default": "", "scope": "machine-overridable", "description": "JDK 25 or newer used to run Java, Spring Boot, and application-server language tooling. This is independent from the project JDK." },
+        "orbyte.environment.runtimePaths": { "type": "object", "default": {}, "scope": "machine-overridable", "additionalProperties": { "type": "string" }, "description": "Locally selected runtime, interpreter, and compiler executable paths by language." },
+        "orbyte.environment.heapMb": { "type": "object", "default": {}, "scope": "machine-overridable", "additionalProperties": { "type": "number", "minimum": 0, "maximum": 131072 }, "description": "Optional language-server heap limits in MB by language. Missing values use automatic sizing." },
         "orbyte.enterprise.wildfly.home": { "type": "string", "default": "", "scope": "resource", "description": "JBoss EAP or WildFly installation directory containing bin/standalone." },
         "orbyte.enterprise.wildfly.debugPort": { "type": "number", "default": 8787, "minimum": 1, "maximum": 65535, "scope": "resource", "description": "JDWP debug port for JBoss EAP or WildFly." },
         "orbyte.enterprise.websphere.profile": { "type": "string", "default": "", "scope": "resource", "description": "IBM WebSphere traditional profile directory containing bin/startServer and bin/wsadmin." },
