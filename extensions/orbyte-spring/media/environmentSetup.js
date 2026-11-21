@@ -20,7 +20,7 @@
 		const heap = state.heapMb[environment.id];
 		const heapAuto = !heap;
 		const isJava = environment.id === 'java';
-		const ready = isJava ? state.javaToolingReady : Boolean(effectivePath);
+		const ready = isJava ? state.javaJdkReady : Boolean(effectivePath);
 
 		root.innerHTML = `
 		<div class="shell">
@@ -56,24 +56,20 @@
 	}
 
 	function javaCards(environment, preferredVersion, detectedPath) {
-		const toolingPath = state.javaToolingPath || detectedPath;
-		const projectPath = state.javaProjectPath;
-		const toolingVersion = Number(preferredVersion) >= 25 ? preferredVersion : '25';
-		const toolingHint = state.javaToolingReady
-			? `JDK ${escapeHtml(state.javaToolingMajor)} is ready for all Java tooling. Reload after changing it.`
-			: state.javaToolingMajor
-				? `Detected Java ${escapeHtml(state.javaToolingMajor)}, but JDK 25 or newer is required to start the Java extensions.`
-				: 'JDK 25 or newer is required before redhat.java and Spring Boot tools can start.';
+		const jdkPath = state.javaJdkPath || detectedPath;
+		const jdkVersion = Number(preferredVersion) >= 25 ? preferredVersion : '25';
+		const jdkHint = state.javaJdkReady
+			? `JDK ${escapeHtml(state.javaJdkMajor)} is configured once for both Orbyte tooling and this project.`
+			: state.javaJdkMajor && state.javaJdkMajor >= 25
+				? `JDK ${escapeHtml(state.javaJdkMajor)} was detected, but the older tooling and project settings are not synchronized yet. Select it once to unify them.`
+				: state.javaJdkMajor
+					? `Detected Java ${escapeHtml(state.javaJdkMajor)}, but JDK 25 or newer is required to run the Java extensions and project tools together.`
+					: 'JDK 25 or newer is required for Java tooling and will also build, run, test, and debug this project.';
 		return `
-		<section class="card"><div class="card-head"><h3>IDE tooling JDK</h3><p>Runs Java, Spring Boot, debugger, and application-server extensions. JDK 25+ is required.</p></div><div class="card-body">
-			<div class="field"><label>Tooling version</label><div class="row"><select id="toolingVersion">${versionOptions(environment, toolingVersion, ['25'])}</select><button class="button secondary" data-download data-role="languageServer">Download</button></div></div>
-			<div class="field"><label>JDK home or detected executable</label><div class="row">${pathBox(toolingPath, 'No JDK 25+ selected')}<button class="button ghost" data-local data-role="languageServer">Select local…</button></div></div>
-			<div class="hint ${state.javaToolingReady ? '' : 'warning'}">${toolingHint}</div>
-		</div></section>
-		<section class="card"><div class="card-head"><h3>Project JDK</h3><p>Used to compile, run, test, and debug this project. It may be older than the tooling JDK.</p></div><div class="card-body">
-			<div class="field"><label>Project Java version</label><div class="row"><select id="version">${versionOptions(environment, preferredVersion)}</select><button class="button secondary" data-download data-role="project">Download</button></div></div>
-			<div class="field"><label>Project JDK home</label><div class="row">${pathBox(projectPath, 'Use a local JDK or download one')}<button class="button ghost" data-local data-role="project">Select local…</button></div></div>
-			<div class="hint">Orbyte updates JAVA_HOME and java.configuration.runtimes for the current project.</div>
+		<section class="card full"><div class="card-head"><h3>Java Development Kit</h3><p>One JDK runs Orbyte's Java extensions and builds, runs, tests, and debugs this project. JDK 25+ is required.</p></div><div class="card-body">
+			<div class="field"><label>JDK version</label><div class="row"><select id="version">${versionOptions(environment, jdkVersion, ['25'])}</select><button class="button secondary" data-download data-role="unified">Download selected</button></div></div>
+			<div class="field"><label>JDK home</label><div class="row">${pathBox(jdkPath, 'No unified JDK selected')}<button class="button ghost" data-local data-role="unified">Select local…</button></div></div>
+			<div class="hint ${state.javaJdkReady ? '' : 'warning'}">${jdkHint}</div>
 		</div></section>`;
 	}
 
@@ -106,9 +102,8 @@
 		document.querySelectorAll('[data-language]').forEach(button => button.addEventListener('click', () => { selectedId = button.dataset.language; render(); }));
 		document.querySelectorAll('[data-local]').forEach(button => button.addEventListener('click', () => vscode.postMessage({ type: 'selectLocal', languageId: environment.id, role: button.dataset.role, scope: document.getElementById('scope').value })));
 		document.querySelectorAll('[data-download]').forEach(button => button.addEventListener('click', () => {
-			const role = button.dataset.role;
-			const field = role === 'languageServer' ? document.getElementById('toolingVersion') : document.getElementById('version');
-			vscode.postMessage({ type: 'download', languageId: environment.id, role, version: field.value });
+			const field = document.getElementById('version');
+			vscode.postMessage({ type: 'download', languageId: environment.id, role: button.dataset.role, version: field.value });
 		}));
 		const heapAuto = document.getElementById('heapAuto');
 		if (heapAuto) { heapAuto.addEventListener('change', () => document.querySelector('.memory-input').classList.toggle('disabled', heapAuto.checked)); }
@@ -116,7 +111,7 @@
 		document.getElementById('settings').addEventListener('click', () => vscode.postMessage({ type: 'openSettings', languageId: environment.id }));
 		document.getElementById('reload').addEventListener('click', () => vscode.postMessage({ type: 'reload', languageId: environment.id }));
 		document.getElementById('apply').addEventListener('click', () => {
-			const version = document.getElementById('version')?.value || document.getElementById('toolingVersion')?.value || environment.recommendedVersion;
+			const version = document.getElementById('version')?.value || environment.recommendedVersion;
 			vscode.postMessage({ type: 'apply', languageId: environment.id, version, heapAuto: document.getElementById('heapAuto')?.checked !== false, heapMb: document.getElementById('heapMb')?.value, autoDetect: document.getElementById('autoDetect').checked, scope: document.getElementById('scope').value });
 		});
 	}

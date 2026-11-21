@@ -126,8 +126,8 @@
       "properties": {
         "orbyte.java.autoDetect": { "type": "boolean", "default": true, "description": "Automatically detect Spring Boot, Maven, Gradle, Ant, and Java application projects." },
         "orbyte.java.showStatusBar": { "type": "boolean", "default": true, "description": "Show the detected Java framework and build tool in the status bar." },
-        "orbyte.java.jdkHome": { "type": "string", "default": "", "scope": "resource", "description": "JDK home used by Orbyte Java build, run, test, and debug actions." },
-        "orbyte.java.languageServerJdkHome": { "type": "string", "default": "", "scope": "machine-overridable", "description": "JDK 25 or newer used to run Java, Spring Boot, and application-server language tooling. This is independent from the project JDK." },
+        "orbyte.java.jdkHome": { "type": "string", "default": "", "scope": "resource", "description": "Unified JDK home used by Orbyte Java tooling and project build, run, test, and debug actions." },
+        "orbyte.java.languageServerJdkHome": { "type": "string", "default": "", "scope": "machine-overridable", "description": "Compatibility setting synchronized automatically with the unified Orbyte Java JDK. JDK 25 or newer is required." },
         "orbyte.environment.autoDetect": { "type": "boolean", "default": true, "scope": "window", "description": "Automatically detect the active project language and prompt when its required SDK, runtime, interpreter, or compiler is missing." },
         "orbyte.environment.runtimePaths": { "type": "object", "default": {}, "scope": "machine-overridable", "additionalProperties": { "type": "string" }, "description": "Locally selected runtime, interpreter, and compiler executable paths by language." },
         "orbyte.environment.preferredVersions": { "type": "object", "default": {}, "scope": "machine-overridable", "additionalProperties": { "type": "string" }, "description": "Preferred SDK and runtime versions selected in the unified Environment Setup dialog." },
