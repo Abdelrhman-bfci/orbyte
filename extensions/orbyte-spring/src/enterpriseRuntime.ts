@@ -63,6 +63,7 @@ class EnterpriseRuntime implements vscode.Disposable, vscode.TreeDataProvider<IS
 			vscode.commands.registerCommand('orbyte.enterprise.debugServer', (value?: unknown) => this.runServerAction('debug', value)),
 			vscode.commands.registerCommand('orbyte.enterprise.attachDebugger', (value?: unknown) => this.runServerAction('attach', value)),
 			vscode.commands.registerCommand('orbyte.enterprise.deploy', (first?: unknown, second?: vscode.Uri) => this.deployCommand(first, second)),
+			vscode.commands.registerCommand('orbyte.enterprise.hotReload', (resource?: vscode.Uri) => this.hotReload(resource)),
 			vscode.workspace.onDidChangeConfiguration(event => {
 				if (event.affectsConfiguration('orbyte.enterprise')) {
 					this.treeChangedEmitter.fire(undefined);
@@ -256,6 +257,37 @@ class EnterpriseRuntime implements vscode.Disposable, vscode.TreeDataProvider<IS
 		await vscode.tasks.executeTask(createDeploymentTask(server, project, artifact));
 	}
 
+	private async hotReload(resource?: vscode.Uri): Promise<boolean> {
+		const servers = configuredServers().filter(server => server.home && isServerInstallationValid(server));
+		if (!servers.length) {
+			return false;
+		}
+		const preferred = vscode.workspace.getConfiguration('orbyte.hotReload').get<ServerKind | 'auto'>('enterpriseServer', 'auto');
+		const server = preferred === 'auto' ? servers[0] : servers.find(candidate => candidate.kind === preferred) ?? servers[0];
+		const projects = await discoverEnterpriseProjects();
+		const project = resource?.scheme === 'file'
+			? projects.filter(candidate => isWithin(resource.fsPath, candidate.root.fsPath)).sort((left, right) => right.root.fsPath.length - left.root.fsPath.length)[0]
+			: undefined;
+		if (!project) {
+			return false;
+		}
+		const buildExecution = await vscode.tasks.executeTask(createEnterpriseBuildTask(project, true));
+		if (await waitForTask(buildExecution) !== 0) {
+			void vscode.window.showWarningMessage(`Hot reload build failed for ${project.name}. The server still has the previous deployment.`);
+			return true;
+		}
+		const artifact = await findDeploymentArtifact(project);
+		if (!artifact) {
+			void vscode.window.showWarningMessage(`Hot reload could not find the ${project.packaging.toUpperCase()} artifact for ${project.name}.`);
+			return true;
+		}
+		const deployment = await vscode.tasks.executeTask(createDeploymentTask(server, project, artifact, true));
+		if (await waitForTask(deployment) !== 0) {
+			void vscode.window.showWarningMessage(`Hot reload deployment failed for ${project.name} on ${server.label}.`);
+		}
+		return true;
+	}
+
 	private async resolveServer(value?: unknown): Promise<IEnterpriseServer | undefined> {
 		const kind = serverKindFrom(value);
 		const servers = configuredServers().filter(server => server.home);
@@ -400,7 +432,7 @@ function enterpriseProjectName(text: string, root: vscode.Uri, buildTool: Enterp
 	return path.basename(root.fsPath);
 }
 
-function createEnterpriseBuildTask(project: IEnterpriseProject): vscode.Task {
+function createEnterpriseBuildTask(project: IEnterpriseProject, quiet = false): vscode.Task {
 	let executable: string;
 	let args: string[];
 	if (project.buildTool === 'maven') {
@@ -422,7 +454,7 @@ function createEnterpriseBuildTask(project: IEnterpriseProject): vscode.Task {
 		[],
 	);
 	task.group = vscode.TaskGroup.Build;
-	task.presentationOptions = { reveal: vscode.TaskRevealKind.Always, panel: vscode.TaskPanelKind.Dedicated, clear: true };
+	task.presentationOptions = { reveal: quiet ? vscode.TaskRevealKind.Silent : vscode.TaskRevealKind.Always, panel: vscode.TaskPanelKind.Dedicated, clear: !quiet };
 	return task;
 }
 
@@ -450,7 +482,7 @@ function createServerTask(server: IEnterpriseServer, action: 'start' | 'stop' | 
 	);
 }
 
-function createDeploymentTask(server: IEnterpriseServer, project: IEnterpriseProject, artifact: vscode.Uri): vscode.Task {
+function createDeploymentTask(server: IEnterpriseServer, project: IEnterpriseProject, artifact: vscode.Uri, quiet = false): vscode.Task {
 	let executable: string;
 	let args: string[];
 	if (server.kind === 'wildfly') {
@@ -470,13 +502,17 @@ function createDeploymentTask(server: IEnterpriseServer, project: IEnterprisePro
 		].join('\n');
 		args = ['-lang', 'jython', '-c', script];
 	}
-	return terminalTask(
+	const task = terminalTask(
 		{ type: 'orbyte-enterprise', action: 'deploy', server: server.kind, project: project.root.fsPath },
 		`Deploy ${project.name} to ${server.label}`,
 		executable,
 		args,
 		project.root.fsPath,
 	);
+	if (quiet) {
+		task.presentationOptions = { reveal: vscode.TaskRevealKind.Silent, panel: vscode.TaskPanelKind.Dedicated, clear: false };
+	}
+	return task;
 }
 
 function terminalTask(definition: vscode.TaskDefinition, name: string, executable: string, args: string[], cwd: string): vscode.Task {

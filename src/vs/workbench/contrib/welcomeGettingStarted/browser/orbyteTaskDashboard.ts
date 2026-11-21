@@ -267,7 +267,7 @@ class OrbyteTaskDashboardModel {
 				Authorization: `Basic ${encodeBase64(VSBuffer.fromString(`${connection.email}:${token}`))}`,
 			},
 			data: JSON.stringify({
-				jql: `assignee = currentUser() AND statusCategory != Done${projectClause} ORDER BY priority ASC, updated DESC`,
+				jql: `assignee = currentUser() AND (statusCategory != Done OR updated >= -90d)${projectClause} ORDER BY priority ASC, updated DESC`,
 				fields: ['summary', 'status', 'priority', 'project', 'updated'],
 				maxResults: 50,
 			}),
@@ -293,7 +293,7 @@ class OrbyteTaskDashboardModel {
 			type: 'POST',
 			url: `${connection.organizationUrl}/${projectPath}/_apis/wit/wiql?$top=50&api-version=7.1`,
 			headers,
-			data: JSON.stringify({ query: "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.AssignedTo] = @Me AND [System.State] NOT IN ('Closed', 'Done', 'Removed') ORDER BY [Microsoft.VSTS.Common.Priority] ASC, [System.ChangedDate] DESC" }),
+			data: JSON.stringify({ query: "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.AssignedTo] = @Me AND ([System.State] NOT IN ('Closed', 'Done', 'Removed') OR [System.ChangedDate] >= @Today - 90) ORDER BY [Microsoft.VSTS.Common.Priority] ASC, [System.ChangedDate] DESC" }),
 			timeout: 20_000,
 			logUrl: false,
 			callSite: 'orbyte.taskDashboard.azure.wiql',
@@ -331,6 +331,11 @@ export class OrbyteTaskDashboard extends Disposable {
 	private readonly model: OrbyteTaskDashboardModel;
 	private readonly renderDisposables = this._register(new DisposableStore());
 	private loading = false;
+	private taskPage = 0;
+	private taskQuery = '';
+	private taskState: 'all' | OrbyteTaskState = 'all';
+	private taskProvider: 'all' | OrbyteTaskProvider = 'all';
+	private readonly taskPageSize = 6;
 
 	constructor(
 		requestService: IRequestService,
@@ -422,14 +427,79 @@ export class OrbyteTaskDashboard extends Disposable {
 
 	private renderTaskPanel(snapshot: IOrbyteTaskDashboardSnapshot): HTMLElement {
 		const panel = $('.orbyte-dashboard-panel.orbyte-task-panel');
-		append(panel, $('.orbyte-panel-header', {}, $('div', {}, $('h3', {}, localize('orbyte.task.myWork', "My work")), $('span', {}, localize('orbyte.task.sortedHint', "Priority and recent activity"))), $('span.orbyte-count', {}, String(snapshot.tasks.length))));
+		const normalizedQuery = this.taskQuery.trim().toLocaleLowerCase();
+		const filteredTasks = snapshot.tasks.filter(task => {
+			const matchesState = this.taskState === 'all' || task.state === this.taskState;
+			const matchesProvider = this.taskProvider === 'all' || task.provider === this.taskProvider;
+			const matchesQuery = !normalizedQuery || [task.title, task.key, task.project, task.priority, task.stateLabel]
+				.some(value => value.toLocaleLowerCase().includes(normalizedQuery));
+			return matchesState && matchesProvider && matchesQuery;
+		});
+		const pageCount = Math.max(1, Math.ceil(filteredTasks.length / this.taskPageSize));
+		this.taskPage = Math.min(this.taskPage, pageCount - 1);
+		const pageTasks = filteredTasks.slice(this.taskPage * this.taskPageSize, (this.taskPage + 1) * this.taskPageSize);
+		append(panel, $('.orbyte-panel-header', {}, $('div', {}, $('h3', {}, localize('orbyte.task.myWork', "My work")), $('span', {}, localize('orbyte.task.sortedHint', "Priority and recent activity"))), $('span.orbyte-count', { title: localize('orbyte.task.filteredCount', "{0} of {1} work items", filteredTasks.length, snapshot.tasks.length) }, String(filteredTasks.length))));
 		if (!snapshot.connectedProviders.length) {
 			append(panel, $('.orbyte-dashboard-empty.compact', {}, icon(Codicon.plug), $('h3', {}, localize('orbyte.task.connectTitle', "Bring your tasks into Orbyte")), $('p', {}, localize('orbyte.task.connectDescription', "Connect Jira or Azure DevOps below. Credentials stay in secure storage."))));
 		} else if (!snapshot.tasks.length) {
 			append(panel, $('.orbyte-dashboard-empty.compact', {}, icon(Codicon.passFilled), $('h3', {}, localize('orbyte.task.clearTitle', "You're all clear")), $('p', {}, localize('orbyte.task.clearDescription', "No active assigned tasks were returned by the connected tools."))));
 		} else {
+			const controls = $('.orbyte-task-controls');
+			const filterRow = $('.orbyte-task-filter-row');
+			const search = $('input.orbyte-task-search', {
+				type: 'search',
+				value: this.taskQuery,
+				placeholder: localize('orbyte.task.searchPlaceholder', "Search issues and work items"),
+				'aria-label': localize('orbyte.task.searchLabel', "Search issues and work items"),
+			}) as HTMLInputElement;
+			const provider = $('select.orbyte-task-provider-filter', { 'aria-label': localize('orbyte.task.providerFilter', "Filter by task provider") },
+				$('option', { value: 'all', selected: this.taskProvider === 'all' }, localize('orbyte.task.allProviders', "All tools")),
+				$('option', { value: 'jira', selected: this.taskProvider === 'jira' }, 'Jira'),
+				$('option', { value: 'azure', selected: this.taskProvider === 'azure' }, 'Azure DevOps'),
+			) as HTMLSelectElement;
+			this.renderDisposables.add(addDisposableListener(search, 'input', () => {
+				this.taskQuery = search.value;
+				this.taskPage = 0;
+				const caret = search.selectionStart ?? this.taskQuery.length;
+				this.render(snapshot);
+				const replacement = this.content.querySelector<HTMLInputElement>('.orbyte-task-search');
+				replacement?.focus();
+				replacement?.setSelectionRange(caret, caret);
+			}));
+			this.renderDisposables.add(addDisposableListener(provider, 'change', () => {
+				this.taskProvider = provider.value as 'all' | OrbyteTaskProvider;
+				this.taskPage = 0;
+				this.render(snapshot);
+			}));
+			append(filterRow, $('.orbyte-task-search-wrap', {}, icon(Codicon.search), search), provider);
+			const tabs = $('.orbyte-task-status-tabs', { role: 'tablist', 'aria-label': localize('orbyte.task.statusFilter', "Filter by status") });
+			const states: readonly { readonly value: 'all' | OrbyteTaskState; readonly label: string }[] = [
+				{ value: 'all', label: localize('orbyte.task.allStatuses', "All") },
+				{ value: 'open', label: localize('orbyte.task.openStatus', "Open") },
+				{ value: 'in-progress', label: localize('orbyte.task.inProgressStatus', "In progress") },
+				{ value: 'blocked', label: localize('orbyte.task.blockedStatus', "Blocked") },
+				{ value: 'done', label: localize('orbyte.task.doneStatus', "Done") },
+			];
+			for (const state of states) {
+				const count = state.value === 'all' ? snapshot.tasks.length : snapshot.tasks.filter(task => task.state === state.value).length;
+				const tab = $(`button.orbyte-task-status-tab${this.taskState === state.value ? '.active' : ''}`, {
+					type: 'button', role: 'tab', 'aria-selected': String(this.taskState === state.value),
+				}, $('span', {}, state.label), $('small', {}, String(count))) as HTMLButtonElement;
+				this.renderDisposables.add(addDisposableListener(tab, 'click', () => {
+					this.taskState = state.value;
+					this.taskPage = 0;
+					this.render(snapshot);
+				}));
+				append(tabs, tab);
+			}
+			append(controls, filterRow, tabs);
+			append(panel, controls);
+			if (!filteredTasks.length) {
+				append(panel, $('.orbyte-dashboard-empty.compact.filtered', {}, icon(Codicon.filter), $('h3', {}, localize('orbyte.task.noMatchesTitle', "No matching work")), $('p', {}, localize('orbyte.task.noMatchesDescription', "Change the search, tool, or status filter to see more items."))));
+				return panel;
+			}
 			const list = $('.orbyte-task-list', { role: 'list' });
-			for (const task of snapshot.tasks.slice(0, 8)) {
+			for (const task of pageTasks) {
 				const item = $('button.orbyte-task-row', { type: 'button', role: 'listitem', title: localize('orbyte.task.openTask', "Open {0}", task.key) },
 					$(`.orbyte-provider-mark.${task.provider}`, {}, icon(task.provider === 'jira' ? Codicon.issues : Codicon.azureDevops)),
 					$('.orbyte-task-copy', {}, $('.orbyte-task-title', {}, $('strong', {}, task.title), $('span', {}, task.key)), $('.orbyte-task-meta', {}, task.project, ' · ', task.priority)),
@@ -439,7 +509,13 @@ export class OrbyteTaskDashboard extends Disposable {
 				this.renderDisposables.add(addDisposableListener(item, 'click', () => void this.openerService.open(URI.parse(task.url))));
 				append(list, item);
 			}
-			append(panel, list);
+			const previous = button(localize('orbyte.task.previousPage', "Previous"), Codicon.chevronLeft, 'secondary compact') as HTMLButtonElement;
+			const next = button(localize('orbyte.task.nextPage', "Next"), Codicon.chevronRight, 'secondary compact') as HTMLButtonElement;
+			previous.disabled = this.taskPage === 0;
+			next.disabled = this.taskPage >= pageCount - 1;
+			this.renderDisposables.add(addDisposableListener(previous, 'click', () => { this.taskPage--; this.render(snapshot); }));
+			this.renderDisposables.add(addDisposableListener(next, 'click', () => { this.taskPage++; this.render(snapshot); }));
+			append(panel, list, $('.orbyte-task-pagination', {}, previous, $('span', {}, localize('orbyte.task.pageStatus', "Page {0} of {1}", this.taskPage + 1, pageCount)), next));
 		}
 		return panel;
 	}

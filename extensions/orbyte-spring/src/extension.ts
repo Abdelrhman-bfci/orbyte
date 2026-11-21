@@ -12,6 +12,7 @@ import { registerEnterpriseRuntime } from './enterpriseRuntime';
 import { registerEnvironmentSetup } from './environmentSetup';
 import { registerJdkRuntime } from './jdkRuntime';
 import { registerProjectRuntime } from './projectRuntime';
+import { registerHotReload } from './hotReload';
 
 interface IChoice {
 	readonly id: string;
@@ -61,6 +62,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	registerJdkRuntime(context);
 	registerProjectRuntime(context);
 	registerEnterpriseRuntime(context);
+	registerHotReload(context);
 }
 
 async function showSpringProjectWizard(): Promise<void> {

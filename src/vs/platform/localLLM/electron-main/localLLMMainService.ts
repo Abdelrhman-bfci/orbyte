@@ -21,7 +21,7 @@ import { toErrorMessage } from '../../../base/common/errorMessage.js';
 import { IEnvironmentMainService } from '../../environment/electron-main/environmentMainService.js';
 import { ILifecycleMainService } from '../../lifecycle/electron-main/lifecycleMainService.js';
 import { ILogService } from '../../log/common/log.js';
-import { ILocalLLMChatRequest, ILocalLLMFimRequest, ILocalLLMModelCatalog, ILocalLLMModelDownloadEvent, ILocalLLMModelInfo, ILocalLLMServerInfo, ILocalLLMService, ILocalLLMStreamEndEvent, ILocalLLMStreamTokenEvent } from '../common/localLLM.js';
+import { ILocalAIProviderCatalog, ILocalAIProviderInfo, ILocalLLMChatRequest, ILocalLLMFimRequest, ILocalLLMModelCatalog, ILocalLLMModelDownloadEvent, ILocalLLMModelInfo, ILocalLLMServerInfo, ILocalLLMService, ILocalLLMStreamEndEvent, ILocalLLMStreamTokenEvent, LocalAIProviderId } from '../common/localLLM.js';
 import { getLocalLLMContextWindowTokens } from '../common/localLLMContextProfile.js';
 
 const readinessTimeout = 120_000;
@@ -30,6 +30,7 @@ const gracefulShutdownTimeout = 2_000;
 interface IActiveRequest {
 	cancelled: boolean;
 	request?: ClientRequest;
+	process?: ChildProcess;
 }
 
 interface IServerPaths {
@@ -60,7 +61,15 @@ interface IModelDefinition {
 interface IModelState {
 	readonly selectedModelId?: string;
 	readonly setupComplete?: boolean;
+	readonly selectedProviderId?: LocalAIProviderId;
 }
+
+const externalProviderDefinitions: readonly Omit<ILocalAIProviderInfo, 'installed' | 'selected'>[] = [
+	{ id: 'local', name: 'Local', description: 'Private on-device Qwen model', command: '' },
+	{ id: 'codex', name: 'Codex', description: 'Use your installed and signed-in Codex CLI', command: 'codex' },
+	{ id: 'cursor', name: 'Cursor', description: 'Use your installed and signed-in Cursor Agent CLI', command: 'agent' },
+	{ id: 'claude', name: 'Claude', description: 'Use your installed and signed-in Claude Code CLI', command: 'claude' },
+];
 
 const gibibyte = 1024 * 1024 * 1024;
 const modelDefinitions: readonly IModelDefinition[] = [
@@ -179,6 +188,37 @@ export class LocalLLMMainService extends Disposable implements ILocalLLMService 
 		return this._state;
 	}
 
+	async getProviderCatalog(): Promise<ILocalAIProviderCatalog> {
+		const state = await this._readModelState();
+		const selectedProviderId = state.selectedProviderId ?? 'local';
+		const providers = await Promise.all(externalProviderDefinitions.map(async provider => ({
+			...provider,
+			installed: provider.id === 'local' || await this._commandAvailable(provider.command),
+			selected: provider.id === selectedProviderId,
+		})));
+		return { selectedProviderId, providers };
+	}
+
+	async selectProvider(providerId: LocalAIProviderId): Promise<ILocalAIProviderCatalog> {
+		const provider = externalProviderDefinitions.find(candidate => candidate.id === providerId);
+		if (!provider) {
+			throw new Error(`Unknown AI provider: ${providerId}.`);
+		}
+		if (provider.id !== 'local' && !await this._commandAvailable(provider.command)) {
+			throw new Error(`${provider.name} CLI is not installed or is not available on PATH.`);
+		}
+		const state = await this._readModelState();
+		await this._writeModelState({ ...state, selectedProviderId: providerId });
+		if (providerId === 'local') {
+			if (state.setupComplete) {
+				await this.startServer();
+			}
+		} else {
+			await this.stopServer();
+		}
+		return this.getProviderCatalog();
+	}
+
 	async getModelCatalog(): Promise<ILocalLLMModelCatalog> {
 		const state = await this._readModelState();
 		const modelDirectory = this._modelDirectory();
@@ -278,11 +318,11 @@ export class LocalLLMMainService extends Disposable implements ILocalLLMService 
 		}
 
 		const previousState = await this._readModelState();
-		this._modelState = { selectedModelId: modelId, setupComplete: previousState.setupComplete };
+		this._modelState = { ...previousState, selectedModelId: modelId, setupComplete: previousState.setupComplete };
 		try {
 			await this.stopServer();
 			await this.startServer();
-			await this._writeModelState({ selectedModelId: modelId, setupComplete: true });
+			await this._writeModelState({ ...previousState, selectedModelId: modelId, setupComplete: true });
 		} catch (error) {
 			this._modelState = previousState;
 			await this._writeModelState(previousState);
@@ -497,6 +537,10 @@ export class LocalLLMMainService extends Disposable implements ILocalLLMService 
 	}
 
 	async streamChat(chatRequest: ILocalLLMChatRequest): Promise<string> {
+		const provider = (await this._readModelState()).selectedProviderId ?? 'local';
+		if (provider !== 'local') {
+			return this._streamExternalProvider(provider, chatRequest);
+		}
 		await this.startServer();
 		this._prepareRequest(chatRequest.requestId);
 
@@ -543,6 +587,7 @@ export class LocalLLMMainService extends Disposable implements ILocalLLMService 
 
 		activeRequest.cancelled = true;
 		activeRequest.request?.destroy();
+		activeRequest.process?.kill('SIGTERM');
 		this._activeRequests.delete(requestId);
 		this._onDidStreamEnd.fire({ requestId, cancelled: true });
 	}
@@ -555,6 +600,121 @@ export class LocalLLMMainService extends Disposable implements ILocalLLMService 
 			throw new Error(`A local LLM request with ID ${requestId} is already active.`);
 		}
 		this._activeRequests.set(requestId, { cancelled: false });
+	}
+
+	private async _streamExternalProvider(providerId: Exclude<LocalAIProviderId, 'local'>, chatRequest: ILocalLLMChatRequest): Promise<string> {
+		this._prepareRequest(chatRequest.requestId);
+		const activeRequest = this._activeRequests.get(chatRequest.requestId)!;
+		const prompt = chatRequest.messages.map(message => `<${message.role}>\n${message.content}\n</${message.role}>`).join('\n\n');
+		const cwd = chatRequest.cwd || process.cwd();
+		const definition = externalProviderDefinitions.find(candidate => candidate.id === providerId)!;
+		const args = providerId === 'codex'
+			? ['exec', '--json', '--sandbox', 'read-only', '--ephemeral', '--skip-git-repo-check', '-']
+			: providerId === 'cursor'
+				? ['-p', '--output-format', 'stream-json', '--stream-partial-output']
+				: ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
+		const child = spawn(definition.command, args, {
+			cwd,
+			env: process.env,
+			shell: isWindows,
+			stdio: ['pipe', 'pipe', 'pipe'],
+		});
+		activeRequest.process = child;
+		// Keep the prompt off the command line. Besides avoiding command-length limits, this
+		// prevents shell metacharacters in code or user requests from being interpreted on
+		// Windows where installed CLI shims are launched through cmd.exe.
+		child.stdin?.end(prompt);
+		let stdoutBuffer = '';
+		let stderr = '';
+		let emitted = false;
+		let lastCumulativeText = '';
+		let finished = false;
+		const emitText = (text: string | undefined, cumulative = false) => {
+			if (!text) {
+				return;
+			}
+			const token = cumulative && text.startsWith(lastCumulativeText) ? text.slice(lastCumulativeText.length) : text;
+			if (cumulative) {
+				lastCumulativeText = text;
+			}
+			if (token) {
+				emitted = true;
+				this._onDidStreamToken.fire({ requestId: chatRequest.requestId, token });
+			}
+		};
+		const consumeLine = (line: string) => {
+			const trimmed = line.trim();
+			if (!trimmed) {
+				return;
+			}
+			try {
+				const value = JSON.parse(trimmed) as Record<string, unknown>;
+				if (providerId === 'codex') {
+					const item = value.item as Record<string, unknown> | undefined;
+					if (value.type === 'item.completed' && item?.type === 'agent_message') {
+						emitText(typeof item.text === 'string' ? item.text : undefined);
+					}
+				} else if (providerId === 'cursor') {
+					const message = value.message as Record<string, unknown> | undefined;
+					const content = Array.isArray(message?.content) ? message.content as Record<string, unknown>[] : [];
+					const text = content.filter(part => part.type === 'text').map(part => typeof part.text === 'string' ? part.text : '').join('');
+					emitText(text || (!emitted && typeof value.result === 'string' ? value.result : undefined), Boolean(text));
+				} else {
+					const event = value.event as Record<string, unknown> | undefined;
+					const delta = event?.delta as Record<string, unknown> | undefined;
+					const result = typeof value.result === 'string' ? value.result : undefined;
+					emitText(typeof delta?.text === 'string' ? delta.text : (!emitted ? result : undefined));
+				}
+			} catch {
+				if (!emitted && !trimmed.startsWith('{')) {
+					emitText(`${trimmed}\n`);
+				}
+			}
+		};
+		child.stdout?.setEncoding('utf8');
+		child.stdout?.on('data', chunk => {
+			stdoutBuffer += String(chunk);
+			const lines = stdoutBuffer.split(/\r?\n/);
+			stdoutBuffer = lines.pop() ?? '';
+			for (const line of lines) {
+				consumeLine(line);
+			}
+		});
+		child.stderr?.setEncoding('utf8');
+		child.stderr?.on('data', chunk => stderr += String(chunk));
+		const finish = (error?: string) => {
+			if (finished) {
+				return;
+			}
+			finished = true;
+			if (stdoutBuffer) {
+				consumeLine(stdoutBuffer);
+			}
+			this._activeRequests.delete(chatRequest.requestId);
+			if (!activeRequest.cancelled) {
+				this._onDidStreamEnd.fire({ requestId: chatRequest.requestId, cancelled: false, error });
+			}
+		};
+		child.once('error', error => finish(toErrorMessage(error)));
+		child.once('close', code => finish(code === 0 ? undefined : (stderr.trim() || `${definition.name} CLI exited with code ${code}.`)));
+		return chatRequest.requestId;
+	}
+
+	private _commandAvailable(command: string): Promise<boolean> {
+		return new Promise(resolve => {
+			const child = spawn(command, ['--version'], { shell: isWindows, stdio: 'ignore' });
+			let settled = false;
+			const finish = (available: boolean) => {
+				if (!settled) {
+					settled = true;
+					clearTimeout(timer);
+					resolve(available);
+				}
+			};
+			const timer = setTimeout(() => { child.kill(); finish(false); }, 3000);
+			child.once('error', () => finish(false));
+			child.once('close', code => finish(code === 0));
+		});
 	}
 
 	private async _streamRequest(requestId: string, path: string, body: object, getToken: (value: object) => string | undefined): Promise<void> {
@@ -717,6 +877,7 @@ export class LocalLLMMainService extends Disposable implements ILocalLLMService 
 			this._modelState = {
 				selectedModelId: typeof parsed.selectedModelId === 'string' ? parsed.selectedModelId : undefined,
 				setupComplete: parsed.setupComplete === true,
+				selectedProviderId: parsed.selectedProviderId === 'codex' || parsed.selectedProviderId === 'cursor' || parsed.selectedProviderId === 'claude' ? parsed.selectedProviderId : 'local',
 			};
 		} catch {
 			this._modelState = {};
@@ -865,6 +1026,7 @@ export class LocalLLMMainService extends Disposable implements ILocalLLMService 
 		for (const [requestId, activeRequest] of this._activeRequests) {
 			activeRequest.cancelled = cancelled;
 			activeRequest.request?.destroy();
+			activeRequest.process?.kill('SIGTERM');
 			this._onDidStreamEnd.fire({ requestId, cancelled, error });
 		}
 		this._activeRequests.clear();

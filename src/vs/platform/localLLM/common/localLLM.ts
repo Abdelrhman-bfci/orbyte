@@ -13,6 +13,21 @@ export const ILocalLLMService = createDecorator<ILocalLLMService>('localLLMServi
 export type LocalLLMServerState = 'stopped' | 'starting' | 'ready' | 'stopping' | 'error';
 export type LocalLLMModelRecommendation = 'recommended' | 'compatible';
 export type LocalLLMModelDownloadState = 'downloading' | 'verifying' | 'complete' | 'cancelled' | 'error';
+export type LocalAIProviderId = 'local' | 'codex' | 'cursor' | 'claude';
+
+export interface ILocalAIProviderInfo {
+	readonly id: LocalAIProviderId;
+	readonly name: string;
+	readonly description: string;
+	readonly command: string;
+	readonly installed: boolean;
+	readonly selected: boolean;
+}
+
+export interface ILocalAIProviderCatalog {
+	readonly selectedProviderId: LocalAIProviderId;
+	readonly providers: readonly ILocalAIProviderInfo[];
+}
 
 export interface ILocalLLMServerInfo {
 	readonly state: LocalLLMServerState;
@@ -77,6 +92,7 @@ export interface ILocalLLMChatRequest {
 	readonly maxTokens?: number;
 	readonly temperature?: number;
 	readonly topP?: number;
+	readonly cwd?: string;
 }
 
 export interface ILocalLLMFimRequest {
@@ -109,6 +125,8 @@ export interface ILocalLLMService {
 
 	getState(): Promise<ILocalLLMServerInfo>;
 	getModelCatalog(): Promise<ILocalLLMModelCatalog>;
+	getProviderCatalog(): Promise<ILocalAIProviderCatalog>;
+	selectProvider(providerId: LocalAIProviderId): Promise<ILocalAIProviderCatalog>;
 	selectModel(modelId: string): Promise<ILocalLLMModelCatalog>;
 	downloadModel(modelId: string): Promise<void>;
 	cancelModelDownload(modelId: string): Promise<void>;

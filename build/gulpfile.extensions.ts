@@ -260,7 +260,12 @@ export const cleanExtensionsBuildTask = task.define('clean-extensions-build', ut
 /**
  * brings in the marketplace extensions for the build
  */
-const bundleMarketplaceExtensionsBuildTask = task.define('bundle-marketplace-extensions-build', () => ext.packageMarketplaceExtensionsStream(false).pipe(gulp.dest('.build')));
+const bundleMarketplaceExtensionsBuildTask = task.define('bundle-marketplace-extensions-build', () => {
+	// Marketplace archives may contain read-only files. Repair a previous output
+	// before overwriting it, then package new files with writable permissions.
+	util.ensureTreeOwnerWritable(path.join(root, '.build', 'extensions'));
+	return ext.packageMarketplaceExtensionsStream(false).pipe(gulp.dest('.build'));
+});
 
 /**
  * Compiles the non-native extensions for the build

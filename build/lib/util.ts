@@ -127,6 +127,43 @@ export function fixWin32DirectoryPermissions(): NodeJS.ReadWriteStream {
 	});
 }
 
+/**
+ * Marketplace VSIX archives can contain read-only files (for example bundled JRE
+ * license files). Keep those files readable while making the packaged build
+ * owner-writable so a later build can safely replace the existing output.
+ */
+export function ensureOwnerWritable(): NodeJS.ReadWriteStream {
+	return es.mapSync<VinylFile, VinylFile>(f => {
+		if (f.stat) {
+			f.stat.mode |= /* owner write */ 0o200;
+		}
+
+		return f;
+	});
+}
+
+export function ensureTreeOwnerWritable(rootPath: string): void {
+	if (!fs.existsSync(rootPath)) {
+		return;
+	}
+
+	const visit = (entryPath: string): void => {
+		const stat = fs.lstatSync(entryPath);
+		if (stat.isSymbolicLink()) {
+			return;
+		}
+
+		fs.chmodSync(entryPath, stat.mode | /* owner write */ 0o200);
+		if (stat.isDirectory()) {
+			for (const entry of fs.readdirSync(entryPath)) {
+				visit(path.join(entryPath, entry));
+			}
+		}
+	};
+
+	visit(rootPath);
+}
+
 export function setExecutableBit(pattern?: string | string[]): NodeJS.ReadWriteStream {
 	const setBit = es.mapSync<VinylFile, VinylFile>(f => {
 		if (!f.stat) {

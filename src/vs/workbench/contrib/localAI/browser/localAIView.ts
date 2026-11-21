@@ -29,7 +29,7 @@ import { IFileService } from '../../../../platform/files/common/files.js';
 import { IHoverService } from '../../../../platform/hover/browser/hover.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
-import { ILocalLLMChatMessage, ILocalLLMModelCatalog, ILocalLLMModelDownloadEvent, ILocalLLMModelInfo, ILocalLLMService, LocalLLMServerState } from '../../../../platform/localLLM/common/localLLM.js';
+import { ILocalAIProviderCatalog, ILocalAIProviderInfo, ILocalLLMChatMessage, ILocalLLMModelCatalog, ILocalLLMModelDownloadEvent, ILocalLLMModelInfo, ILocalLLMService, LocalLLMServerState } from '../../../../platform/localLLM/common/localLLM.js';
 import { IMarkdownRendererService } from '../../../../platform/markdown/browser/markdownRenderer.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
@@ -201,6 +201,8 @@ export class LocalAIViewPane extends ViewPane {
 	private _mentionPickerOpen = false;
 	private _modelCatalog: ILocalLLMModelCatalog | undefined;
 	private _modelManagerVisible = false;
+	private _providerCatalog: ILocalAIProviderCatalog | undefined;
+	private _providerManagerVisible = false;
 	private _modelSelectionPending = false;
 	private readonly _chatSessionId: string;
 	private readonly _onDidRequestNewChat: (() => void) | undefined;
@@ -243,7 +245,7 @@ export class LocalAIViewPane extends ViewPane {
 		this._register(this._localLLMService.onDidChangeState(state => this._updateServerState(state.state)));
 		this._register(this._localLLMService.onDidChangeModels(catalog => {
 			this._modelCatalog = catalog;
-			this._modelManagerVisible = catalog.setupRequired || this._modelManagerVisible;
+			this._modelManagerVisible = (this._providerCatalog?.selectedProviderId ?? 'local') === 'local' && (catalog.setupRequired || this._modelManagerVisible);
 			this._renderModelButton();
 			this._renderMessages();
 			this._updateSetupAvailability();
@@ -317,6 +319,10 @@ export class LocalAIViewPane extends ViewPane {
 		this._modelButton.setAttribute('aria-haspopup', 'dialog');
 		this._modelButton.setAttribute('aria-label', localize('localAIModelAriaLabel', "Choose local AI model"));
 		this._register(dom.addDisposableListener(this._modelButton, dom.EventType.CLICK, () => {
+			if (this._providerCatalog?.selectedProviderId !== 'local') {
+				this.showProviderSettings();
+				return;
+			}
 			// Model setup is the action the user needs when setup is required, so the
 			// picker must remain available instead of becoming a no-op in that state.
 			this._modelManagerVisible = this._modelCatalog?.setupRequired || !this._modelManagerVisible;
@@ -398,19 +404,49 @@ export class LocalAIViewPane extends ViewPane {
 
 	showModelManager(): void {
 		this._modelManagerVisible = true;
+		this._providerManagerVisible = false;
 		this._renderMessages();
+	}
+
+	showProviderSettings(): void {
+		this._providerManagerVisible = true;
+		this._modelManagerVisible = false;
+		void this._refreshProviders();
+		this._renderMessages();
+	}
+
+	private async _refreshProviders(): Promise<void> {
+		try {
+			this._providerCatalog = await this._localLLMService.getProviderCatalog();
+			this._renderModelButton();
+			this._updateSetupAvailability();
+			this._renderMessages();
+			const selected = this._providerCatalog.providers.find(provider => provider.selected);
+			if (this._stateElement && selected?.id !== 'local') {
+				this._stateElement.dataset.state = selected?.installed ? 'ready' : 'error';
+				this._stateElement.textContent = selected?.installed
+					? localize('localAIExternalProviderReady', "{0} CLI ready", selected.name)
+					: localize('localAIExternalProviderMissing', "{0} CLI not found", selected?.name ?? 'AI');
+			}
+		} catch (error) {
+			this._notificationService.error(localize('localAIProviderLoadError', "Unable to detect AI providers: {0}", error instanceof Error ? error.message : String(error)));
+		}
 	}
 
 	private async _initializeModels(): Promise<void> {
 		try {
+			this._providerCatalog = await this._localLLMService.getProviderCatalog();
 			this._modelCatalog = await this._localLLMService.getModelCatalog();
-			this._modelManagerVisible = this._modelCatalog.setupRequired;
+			const selectedProvider = this._providerCatalog.providers.find(provider => provider.selected);
+			this._providerManagerVisible = selectedProvider?.id !== 'local' && selectedProvider?.installed === false;
+			this._modelManagerVisible = this._providerCatalog.selectedProviderId === 'local' && this._modelCatalog.setupRequired;
 			this._renderModelButton();
 			this._renderMessages();
 			this._updateSetupAvailability();
-			if (!this._modelCatalog.setupRequired) {
+			if (this._providerCatalog.selectedProviderId === 'local' && !this._modelCatalog.setupRequired) {
 				await this._localLLMService.startServer();
 			}
+			await this._refreshProviders();
 		} catch (error) {
 			this._notificationService.error(localize('localAIModelInitializationError', "Unable to initialize local models: {0}", error instanceof Error ? error.message : String(error)));
 		}
@@ -420,9 +456,12 @@ export class LocalAIViewPane extends ViewPane {
 		if (!this._modelButton) {
 			return;
 		}
+		const provider = this._providerCatalog?.providers.find(candidate => candidate.selected);
 		const selected = this._modelCatalog?.models.find(model => model.selected);
-		this._renderDropdownButton(this._modelButton, selected?.parameters ?? localize('localAIChooseModelCompact', "Model"));
-		this._modelButton.title = selected
+		this._renderDropdownButton(this._modelButton, provider?.id !== 'local' ? provider?.name ?? 'AI' : selected?.parameters ?? localize('localAIChooseModelCompact', "Model"));
+		this._modelButton.title = provider?.id !== 'local'
+			? localize('localAICurrentProvider', "Current AI provider: {0}", provider?.name ?? 'AI')
+			: selected
 			? localize('localAICurrentModel', "Current model: {0}", selected.name)
 			: localize('localAIChooseModel', "Choose a local AI model");
 	}
@@ -473,12 +512,14 @@ export class LocalAIViewPane extends ViewPane {
 	}
 
 	private _updateSetupAvailability(): void {
-		const setupRequired = this._modelCatalog?.setupRequired === true;
+		const selectedProvider = this._providerCatalog?.providers.find(provider => provider.selected);
+		const setupRequired = (this._providerCatalog?.selectedProviderId ?? 'local') === 'local' && this._modelCatalog?.setupRequired === true;
+		const providerUnavailable = selectedProvider?.id !== 'local' && selectedProvider?.installed === false;
 		if (this._input && !this._activeRequestId) {
-			this._input.disabled = setupRequired;
+			this._input.disabled = setupRequired || providerUnavailable;
 		}
 		if (this._sendButton && !this._activeRequestId) {
-			this._sendButton.disabled = setupRequired;
+			this._sendButton.disabled = setupRequired || providerUnavailable;
 		}
 	}
 
@@ -1068,6 +1109,7 @@ export class LocalAIViewPane extends ViewPane {
 				messages,
 				maxTokens: getLocalLLMGenerationTokens(this._contextWindowTokens(), mode === 'plan' ? 'planner' : 'chat'),
 				temperature: mode === 'plan' ? 0.15 : 0.2,
+				cwd: this._workspaceContextService.getWorkspace().folders[0]?.uri.fsPath,
 			});
 		} catch (error) {
 			this._requestWatchdog.cancel();
@@ -1095,6 +1137,9 @@ export class LocalAIViewPane extends ViewPane {
 	}
 
 	private _contextWindowTokens(): number {
+		if (this._providerCatalog?.selectedProviderId && this._providerCatalog.selectedProviderId !== 'local') {
+			return 131_072;
+		}
 		return this._modelCatalog?.models.find(model => model.selected)?.contextWindowTokens ?? localLLMMinimumContextTokens;
 	}
 
@@ -1155,6 +1200,7 @@ export class LocalAIViewPane extends ViewPane {
 				messages,
 				maxTokens,
 				temperature: stage === 'planner' ? 0.1 : 0.05,
+				cwd: this._workspaceContextService.getWorkspace().folders[0]?.uri.fsPath,
 			});
 		} catch (error) {
 			this._requestWatchdog.cancel();
@@ -2199,6 +2245,70 @@ export class LocalAIViewPane extends ViewPane {
 		});
 	}
 
+	private async _selectProvider(provider: ILocalAIProviderInfo): Promise<void> {
+		try {
+			this._providerCatalog = await this._localLLMService.selectProvider(provider.id);
+			this._providerManagerVisible = false;
+			if (provider.id === 'local' && this._modelCatalog?.setupRequired) {
+				this._modelManagerVisible = true;
+			}
+			this._renderModelButton();
+			this._updateSetupAvailability();
+			this._renderMessages();
+			await this._refreshProviders();
+		} catch (error) {
+			this._notificationService.error(localize('localAIProviderSelectError', "Unable to use {0}: {1}", provider.name, error instanceof Error ? error.message : String(error)));
+		}
+	}
+
+	private _renderProviderManager(): void {
+		if (!this._messagesContainer) {
+			return;
+		}
+		const manager = dom.append(this._messagesContainer, dom.$('.local-ai-model-manager.local-ai-provider-manager'));
+		const header = dom.append(manager, dom.$('.local-ai-model-manager-header'));
+		const heading = dom.append(header, dom.$('.local-ai-model-manager-heading'));
+		const title = dom.append(heading, dom.$('h2'));
+		title.textContent = localize('localAIProviderSettingsTitle', "AI providers");
+		const subtitle = dom.append(heading, dom.$('p'));
+		subtitle.textContent = localize('localAIProviderSettingsDescription', "Use Orbyte's local model or a signed-in CLI already installed on this computer. Agent planning, review, repair, and testing stay enabled.");
+		const closeButton = dom.append(header, dom.$<HTMLButtonElement>('button.local-ai-model-close.codicon.codicon-close'));
+		closeButton.type = 'button';
+		closeButton.title = localize('localAICloseProviderSettings', "Close AI provider settings");
+		this._messageRenderStore.add(dom.addDisposableListener(closeButton, dom.EventType.CLICK, () => {
+			this._providerManagerVisible = false;
+			this._renderMessages();
+		}));
+
+		const list = dom.append(manager, dom.$('.local-ai-model-list.local-ai-provider-list'));
+		for (const provider of this._providerCatalog?.providers ?? []) {
+			const card = dom.append(list, dom.$('.local-ai-model-card.local-ai-provider-card'));
+			card.classList.toggle('selected', provider.selected);
+			const cardHeader = dom.append(card, dom.$('.local-ai-model-card-header'));
+			const identity = dom.append(cardHeader, dom.$('.local-ai-model-identity'));
+			const name = dom.append(identity, dom.$('strong'));
+			name.textContent = provider.name;
+			const badges = dom.append(identity, dom.$('.local-ai-model-badges'));
+			const availability = dom.append(badges, dom.$(`span.local-ai-model-badge.${provider.installed ? 'recommended' : ''}`));
+			availability.textContent = provider.id === 'local'
+				? localize('localAIProviderBuiltIn', "Built in")
+				: provider.installed ? localize('localAIProviderDetected', "Detected") : localize('localAIProviderMissing', "Not installed");
+			const action = dom.append(cardHeader, dom.$<HTMLButtonElement>('button.local-ai-button'));
+			action.type = 'button';
+			action.textContent = provider.selected ? localize('localAIProviderInUse', "In use") : localize('localAIUseProvider', "Use");
+			action.disabled = provider.selected || !provider.installed;
+			this._messageRenderStore.add(dom.addDisposableListener(action, dom.EventType.CLICK, () => void this._selectProvider(provider)));
+			const description = dom.append(card, dom.$('.local-ai-model-description'));
+			description.textContent = provider.description;
+			if (!provider.installed && provider.id !== 'local') {
+				const command = dom.append(card, dom.$('.local-ai-provider-command'));
+				command.textContent = localize('localAIProviderCommandHint', "Install and sign in to the {0} command, then reopen these settings.", provider.command);
+			}
+		}
+		const note = dom.append(manager, dom.$('.local-ai-model-privacy'));
+		note.textContent = localize('localAIProviderPrivacy', "Orbyte never stores provider passwords or API keys. Authentication remains in Codex, Cursor, or Claude on this computer.");
+	}
+
 	private _renderModelManager(): void {
 		if (!this._messagesContainer || !this._modelCatalog) {
 			return;
@@ -2323,6 +2433,10 @@ export class LocalAIViewPane extends ViewPane {
 
 		this._messageRenderStore.clear();
 		dom.clearNode(this._messagesContainer);
+		if (this._providerManagerVisible) {
+			this._renderProviderManager();
+			return;
+		}
 		if (this._modelManagerVisible) {
 			this._renderModelManager();
 			return;
@@ -2342,7 +2456,10 @@ export class LocalAIViewPane extends ViewPane {
 			instructions.append(` ${localize('localAIInstructionsSuffix', "to onboard Orbyte AI onto your codebase.")}`);
 			this._messageRenderStore.add(dom.addDisposableListener(instructionsButton, dom.EventType.CLICK, () => this._prepareProjectInstructions()));
 			const privacy = dom.append(empty, dom.$('.local-ai-empty-privacy'));
-			privacy.textContent = localize('localAIEmptyPrivacy', "Runs locally. Your code stays in your orbit.");
+			const selectedProvider = this._providerCatalog?.providers.find(provider => provider.selected);
+			privacy.textContent = selectedProvider && selectedProvider.id !== 'local'
+				? localize('localAIEmptyExternalPrivacy', "Uses the signed-in {0} CLI on this computer. Orbyte does not store its credentials.", selectedProvider.name)
+				: localize('localAIEmptyPrivacy', "Runs locally. Your code stays in your orbit.");
 			return;
 		}
 

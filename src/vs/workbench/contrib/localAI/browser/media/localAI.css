@@ -187,7 +187,14 @@
 	text-transform: uppercase;
 }
 
-.local-ai-floating-close {
+.local-ai-floating-header-actions {
+	display: flex;
+	align-items: center;
+	gap: 3px;
+}
+
+.local-ai-floating-close,
+.local-ai-floating-settings {
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -204,14 +211,25 @@
 	line-height: 1;
 }
 
-.local-ai-floating-close:hover {
+.local-ai-floating-settings { font-size: 16px; }
+
+.local-ai-floating-close:hover,
+.local-ai-floating-settings:hover {
 	color: var(--vscode-foreground);
 	background: var(--vscode-toolbar-hoverBackground);
 }
 
-.local-ai-floating-close:focus-visible {
+.local-ai-floating-close:focus-visible,
+.local-ai-floating-settings:focus-visible {
 	outline: 1px solid var(--vscode-focusBorder);
 	outline-offset: 1px;
+}
+
+.local-ai-provider-command {
+	margin-top: 8px;
+	color: var(--vscode-descriptionForeground);
+	font-family: var(--monaco-monospace-font);
+	font-size: 10px;
 }
 
 .local-ai-floating-tabs {

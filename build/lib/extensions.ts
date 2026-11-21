@@ -301,6 +301,7 @@ export function fromGithub({ name, version, repo, sha256, metadata }: IExtension
 		// The checksum is tied to a specific version; when resolving the latest release the
 		// downloaded asset differs, so it cannot be validated against the pinned checksum.
 		checksumSha256: latest ? undefined : (asset ? asset.sha256 : sha256),
+		verbose: true,
 		latest
 	})
 		.pipe(buffer())
@@ -625,6 +626,7 @@ export function packageMarketplaceExtensionsStream(forWeb: boolean): Stream {
 
 	return (
 		marketplaceExtensionsStream
+			.pipe(util2.ensureOwnerWritable())
 			.pipe(util2.setExecutableBit(['**/*.sh']))
 	);
 }

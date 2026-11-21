@@ -67,10 +67,21 @@ export async function fetchUrl(url: string, options: IFetchOptions, retries = 10
 				log(`Fetch completed: Status ${response.status}. Took ${ansiColors.magenta(`${new Date().getTime() - startTime} ms`)}`);
 			}
 			if (response.ok && (response.status >= 200 && response.status < 300)) {
-				// Reset timeout for body download - large files need more time
+				// Reset timeout for body download. Platform-specific Java VSIX files include
+				// a JRE and can be large on slower Windows connections; the idle timeout
+				// below still retries a genuinely stalled transfer promptly.
 				clearTimeout(timeout);
-				timeout = setTimeout(() => controller.abort(), 5 * 60 * 1000);
-				const contents = await readBody(response, controller, options.idleTimeout ?? defaultIdleTimeout);
+				timeout = setTimeout(() => controller.abort(), 30 * 60 * 1000);
+				let lastReportedBytes = 0;
+				const totalBytes = Number(response.headers.get('content-length')) || undefined;
+				const contents = await readBody(response, controller, options.idleTimeout ?? defaultIdleTimeout, verbose ? receivedBytes => {
+					if (receivedBytes - lastReportedBytes >= 16 * 1024 * 1024 || (totalBytes !== undefined && receivedBytes === totalBytes)) {
+						lastReportedBytes = receivedBytes;
+						const receivedMb = (receivedBytes / (1024 * 1024)).toFixed(1);
+						const total = totalBytes === undefined ? '' : ` / ${(totalBytes / (1024 * 1024)).toFixed(1)} MB`;
+						log(`Download progress: ${ansiColors.magenta(`${receivedMb} MB${total}`)}`);
+					}
+				} : undefined);
 				if (options.checksumSha256) {
 					const actualSHA256Checksum = crypto.createHash('sha256').update(contents).digest('hex');
 					if (actualSHA256Checksum !== options.checksumSha256) {
@@ -115,12 +126,13 @@ export async function fetchUrl(url: string, options: IFetchOptions, retries = 10
  * Reads a response body and aborts the request when no data arrives for `idleTimeout` milliseconds, so that a stalled
  * download is retried right away instead of when the timeout of the whole download expires.
  */
-async function readBody(response: Response, controller: AbortController, idleTimeout: number): Promise<Buffer> {
+async function readBody(response: Response, controller: AbortController, idleTimeout: number, onProgress?: (receivedBytes: number) => void): Promise<Buffer> {
 	if (!response.body) {
 		return Buffer.from(await response.arrayBuffer());
 	}
 	const chunks: Uint8Array[] = [];
 	const reader = response.body.getReader();
+	let receivedBytes = 0;
 	const idleTimer = setTimeout(() => controller.abort(new Error(`No data received for ${idleTimeout} ms`)), idleTimeout);
 	try {
 		while (true) {
@@ -129,6 +141,8 @@ async function readBody(response: Response, controller: AbortController, idleTim
 				break;
 			}
 			chunks.push(value);
+			receivedBytes += value.byteLength;
+			onProgress?.(receivedBytes);
 			idleTimer.refresh();
 		}
 	} finally {

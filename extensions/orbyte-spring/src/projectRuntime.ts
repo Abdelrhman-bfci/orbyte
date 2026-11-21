@@ -18,6 +18,7 @@ interface IJavaProject {
 	readonly name: string;
 	readonly buildTool: BuildTool;
 	readonly springBoot: boolean;
+	readonly springDevtools: boolean;
 	readonly mainClass?: string;
 	readonly mainUri?: vscode.Uri;
 	readonly antTargets: ReadonlySet<string>;
@@ -69,6 +70,7 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 			vscode.commands.registerCommand('orbyte.spring.debug', (uri?: vscode.Uri) => this.execute('debug', uri)),
 			vscode.commands.registerCommand('orbyte.spring.stop', (uri?: vscode.Uri) => this.stop(uri)),
 			vscode.commands.registerCommand('orbyte.spring.restart', (uri?: vscode.Uri) => this.restart(uri)),
+			vscode.commands.registerCommand('orbyte.spring.hotReload', (uri?: vscode.Uri) => this.hotReload(uri)),
 			vscode.commands.registerCommand('orbyte.spring.build', (uri?: vscode.Uri) => this.execute('build', uri)),
 			vscode.commands.registerCommand('orbyte.spring.test', (uri?: vscode.Uri) => this.execute('test', uri)),
 			vscode.commands.registerCommand('orbyte.spring.refreshProjects', () => this.refresh(true)),
@@ -304,6 +306,37 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 			return;
 		}
 		await this.restartProject(project);
+	}
+
+	private async hotReload(uri?: vscode.Uri): Promise<boolean> {
+		const project = this.projectForUri(uri ?? vscode.window.activeTextEditor?.document.uri);
+		if (!project) {
+			return false;
+		}
+		const mode = this.activeMode(project);
+		if (!mode) {
+			return false;
+		}
+		if (!project.springBoot || !project.springDevtools) {
+			await this.restartProject(project);
+			return true;
+		}
+		const command = incrementalCommandFor(project);
+		const task = new vscode.Task(
+			{ type: 'orbyte-java', action: 'hotReload', project: project.root.fsPath },
+			project.folder,
+			`Hot Reload ${project.name}`,
+			'Orbyte Hot Reload',
+			new vscode.ShellExecution(command.executable, command.args, { cwd: project.root.fsPath, env: configuredJdkEnvironment(project.root) }),
+			[],
+		);
+		task.presentationOptions = { reveal: vscode.TaskRevealKind.Silent, panel: vscode.TaskPanelKind.Dedicated, clear: false };
+		const execution = await vscode.tasks.executeTask(task);
+		const exitCode = await waitForTaskProcess(execution);
+		if (exitCode !== 0) {
+			void vscode.window.showWarningMessage(`Hot reload build failed for ${project.name}. Open the task terminal for details.`);
+		}
+		return true;
 	}
 
 	private async restartProject(project: IJavaProject): Promise<void> {
@@ -600,6 +633,7 @@ async function inspectProject(candidate: IProjectCandidate): Promise<IJavaProjec
 		...candidate,
 		name: await projectName(candidate, buildText),
 		springBoot,
+		springDevtools: /spring-boot-devtools/.test(buildText),
 		mainClass,
 		mainUri,
 		antTargets,
@@ -674,6 +708,36 @@ function commandFor(project: IJavaProject, action: Exclude<ProjectAction, 'debug
 		return { executable: process.platform === 'win32' ? 'ant.bat' : 'ant', args: target ? [target] : [] };
 	}
 	return { executable: process.platform === 'win32' ? 'java.exe' : 'java', args: project.mainClass ? [project.mainClass] : [] };
+}
+
+function incrementalCommandFor(project: IJavaProject): { executable: string; args: string[] } {
+	if (project.buildTool === 'maven') {
+		const wrapperPath = path.join(project.root.fsPath, process.platform === 'win32' ? 'mvnw.cmd' : 'mvnw');
+		return fileExists(wrapperPath)
+			? process.platform === 'win32' ? { executable: wrapperPath, args: ['-DskipTests', 'compile'] } : { executable: '/bin/sh', args: [wrapperPath, '-DskipTests', 'compile'] }
+			: { executable: process.platform === 'win32' ? 'mvn.cmd' : 'mvn', args: ['-DskipTests', 'compile'] };
+	}
+	if (project.buildTool === 'gradle') {
+		const wrapperPath = path.join(project.root.fsPath, process.platform === 'win32' ? 'gradlew.bat' : 'gradlew');
+		return fileExists(wrapperPath)
+			? process.platform === 'win32' ? { executable: wrapperPath, args: ['classes'] } : { executable: '/bin/sh', args: [wrapperPath, 'classes'] }
+			: { executable: process.platform === 'win32' ? 'gradle.bat' : 'gradle', args: ['classes'] };
+	}
+	if (project.buildTool === 'ant') {
+		return { executable: process.platform === 'win32' ? 'ant.bat' : 'ant', args: project.antTargets.has('compile') ? ['compile'] : [] };
+	}
+	return { executable: process.platform === 'win32' ? 'java.exe' : 'java', args: [] };
+}
+
+function waitForTaskProcess(execution: vscode.TaskExecution): Promise<number | undefined> {
+	return new Promise(resolve => {
+		const disposable = vscode.tasks.onDidEndTaskProcess(event => {
+			if (event.execution === execution) {
+				disposable.dispose();
+				resolve(event.exitCode);
+			}
+		});
+	});
 }
 
 function parseAntTargets(text: string): ReadonlySet<string> {

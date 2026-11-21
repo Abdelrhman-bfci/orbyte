@@ -69,6 +69,7 @@ interface ILocalAIFloatingChatService {
 	readonly _serviceBrand: undefined;
 	show(focus?: boolean): void;
 	showModels(): void;
+	showSettings(): void;
 	toggle(): void;
 }
 
@@ -124,9 +125,14 @@ class LocalAIFloatingChatService extends Disposable implements ILocalAIFloatingC
 		const title = dom.append(brand, dom.$('span.local-ai-floating-title'));
 		title.textContent = localize('localAIFloatingTitle', "Orbyte AI");
 		const privacy = dom.append(brand, dom.$('span.local-ai-floating-privacy'));
-		privacy.textContent = localize('localAIFloatingPrivacy', "Local");
+		privacy.textContent = localize('localAIFloatingPrivacy', "Local / CLI");
 
-		const closeButton = dom.append(floatingHeader, dom.$<HTMLButtonElement>('button.local-ai-floating-close'));
+		const headerActions = dom.append(floatingHeader, dom.$('.local-ai-floating-header-actions'));
+		const settingsButton = dom.append(headerActions, dom.$<HTMLButtonElement>('button.local-ai-floating-settings.codicon.codicon-settings-gear'));
+		settingsButton.type = 'button';
+		settingsButton.title = localize('localAIFloatingSettings', "AI provider settings");
+		settingsButton.setAttribute('aria-label', localize('localAIFloatingSettings', "AI provider settings"));
+		const closeButton = dom.append(headerActions, dom.$<HTMLButtonElement>('button.local-ai-floating-close'));
 		closeButton.type = 'button';
 		closeButton.textContent = '×';
 		closeButton.title = localize('localAIFloatingClose', "Close Orbyte AI");
@@ -153,6 +159,7 @@ class LocalAIFloatingChatService extends Disposable implements ILocalAIFloatingC
 		launcherLabel.textContent = localize('localAIFloatingLauncherLabel', "Ask Orbyte");
 
 		this._register(dom.addDisposableListener(this.launcher, dom.EventType.CLICK, () => this.toggle()));
+		this._register(dom.addDisposableListener(settingsButton, dom.EventType.CLICK, () => this.showSettings()));
 		this._register(dom.addDisposableListener(closeButton, dom.EventType.CLICK, () => this.hide()));
 		const document = dom.getWindow(root).document;
 		this._register(dom.addDisposableListener(document, dom.EventType.KEY_DOWN, event => {
@@ -208,6 +215,11 @@ class LocalAIFloatingChatService extends Disposable implements ILocalAIFloatingC
 	showModels(): void {
 		this.show(false);
 		this.activeSession?.view.showModelManager();
+	}
+
+	showSettings(): void {
+		this.show(false);
+		this.activeSession?.view.showProviderSettings();
 	}
 
 	toggle(): void {

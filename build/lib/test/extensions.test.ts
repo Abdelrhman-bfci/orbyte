@@ -11,7 +11,23 @@ import path from 'path';
 import { suite, test } from 'node:test';
 import type VinylFile from 'vinyl';
 import { getSharedExtensionDependencyStream, isPackagedTypeScriptFile } from '../extensions.ts';
-import { cleanNodeModules } from '../util.ts';
+import { cleanNodeModules, ensureTreeOwnerWritable } from '../util.ts';
+
+suite('ensureTreeOwnerWritable', () => {
+	test('repairs read-only marketplace files before a repeated build', t => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vscode-extension-permissions-'));
+		t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+		const file = path.join(root, 'extension', 'ADDITIONAL_LICENSE_INFO');
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, 'first');
+		fs.chmodSync(file, 0o444);
+
+		ensureTreeOwnerWritable(root);
+		fs.writeFileSync(file, 'second');
+
+		assert.strictEqual(fs.readFileSync(file, 'utf8'), 'second');
+	});
+});
 
 suite('isPackagedTypeScriptFile', () => {
 	test('keeps package.json and lib, without the compiler, typescriptServices and most declarations', () => {
