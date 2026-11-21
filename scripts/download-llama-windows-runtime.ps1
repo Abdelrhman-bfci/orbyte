@@ -20,11 +20,29 @@ $Archive = Join-Path $TemporaryRoot $Asset
 $Extracted = Join-Path $TemporaryRoot 'extracted'
 $License = Join-Path $TemporaryRoot 'llama.cpp-LICENSE'
 
+function Get-OrbyteSha256Checksum {
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$Path
+	)
+
+	$ChecksumStream = [System.IO.File]::OpenRead($Path)
+	$ChecksumAlgorithm = [System.Security.Cryptography.SHA256]::Create()
+	try {
+		$ChecksumBytes = $ChecksumAlgorithm.ComputeHash($ChecksumStream)
+		return ([System.BitConverter]::ToString($ChecksumBytes)).Replace('-', '').ToLowerInvariant()
+	}
+	finally {
+		$ChecksumAlgorithm.Dispose()
+		$ChecksumStream.Dispose()
+	}
+}
+
 try {
 	New-Item -ItemType Directory -Force -Path $TemporaryRoot, $Extracted, $Target | Out-Null
 	Write-Host "[Orbyte] Downloading llama.cpp $Version runtime for Windows $Architecture..."
 	Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $Archive
-	$ActualChecksum = (Get-FileHash -Algorithm SHA256 $Archive).Hash.ToLowerInvariant()
+	$ActualChecksum = Get-OrbyteSha256Checksum -Path $Archive
 	if ($ActualChecksum -ne $Checksums[$Architecture]) {
 		throw "llama.cpp archive checksum mismatch. Expected $($Checksums[$Architecture]), received $ActualChecksum."
 	}
@@ -38,7 +56,7 @@ try {
 	}
 
 	Invoke-WebRequest -UseBasicParsing -Uri $LicenseUrl -OutFile $License
-	$ActualLicenseChecksum = (Get-FileHash -Algorithm SHA256 $License).Hash.ToLowerInvariant()
+	$ActualLicenseChecksum = Get-OrbyteSha256Checksum -Path $License
 	if ($ActualLicenseChecksum -ne $LicenseChecksum) {
 		throw "llama.cpp license checksum mismatch."
 	}
