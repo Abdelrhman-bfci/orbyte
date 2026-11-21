@@ -77,6 +77,9 @@ if /i not "%ORBYTE_ACTIVE_PNPM%"=="%ORBYTE_PNPM_VERSION%" (
 	exit /b 1
 )
 
+call :ensure_python
+if errorlevel 1 exit /b 1
+
 call :ensure_cpp_build_tools
 if errorlevel 1 exit /b 1
 
@@ -100,6 +103,54 @@ if not exist "node_modules\.bin\npm-run-all2.cmd" (
 echo [Orbyte] Setup complete with Node.js %ORBYTE_ACTIVE_NODE% and pnpm %ORBYTE_ACTIVE_PNPM%.
 echo [Orbyte] Run: pnpm run compile
 echo [Orbyte] Then: pnpm run orbyte:run:windows
+exit /b 0
+
+:ensure_python
+set "ORBYTE_PYTHON="
+for /f "delims=" %%p in ('python -c "import sys; print(sys.executable)" 2^>nul') do set "ORBYTE_PYTHON=%%p"
+if defined ORBYTE_PYTHON goto python_found
+
+for /f "delims=" %%p in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do set "ORBYTE_PYTHON=%%p"
+if defined ORBYTE_PYTHON goto python_found
+
+where winget >nul 2>nul
+if errorlevel 1 (
+	echo [Orbyte] Python 3 is required by node-gyp but was not found.
+	echo [Orbyte] Install Python 3.13 and add it to PATH, then run this script again.
+	exit /b 1
+)
+
+echo [Orbyte] Python was not found. Installing Python 3.13 with WinGet...
+winget install --id Python.Python.3.13 -e --scope user --accept-package-agreements --accept-source-agreements
+if errorlevel 1 (
+	echo [Orbyte] Python installation failed.
+	exit /b 1
+)
+
+rem Make the default per-user Python install visible to this already-open shell.
+set "PATH=%LOCALAPPDATA%\Programs\Python\Python313;%LOCALAPPDATA%\Programs\Python\Python313\Scripts;%PATH%"
+for /f "delims=" %%p in ('python -c "import sys; print(sys.executable)" 2^>nul') do set "ORBYTE_PYTHON=%%p"
+if not defined ORBYTE_PYTHON if exist "%LOCALAPPDATA%\Programs\Python\Python313\python.exe" set "ORBYTE_PYTHON=%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
+if not defined ORBYTE_PYTHON if exist "%ProgramFiles%\Python313\python.exe" set "ORBYTE_PYTHON=%ProgramFiles%\Python313\python.exe"
+
+if not defined ORBYTE_PYTHON (
+	echo [Orbyte] Python was installed, but its executable could not be located.
+	echo [Orbyte] Open a new Command Prompt and run this script again.
+	exit /b 1
+)
+
+:python_found
+"%ORBYTE_PYTHON%" -c "import sys; raise SystemExit(0 if sys.version_info ^>= (3, 9) else 1)" >nul 2>nul
+if errorlevel 1 (
+	echo [Orbyte] Python 3.9 or newer is required, but found %ORBYTE_PYTHON%.
+	exit /b 1
+)
+
+rem node-gyp honors both variables. Pinning the executable avoids Windows Store
+rem aliases and stale PATH entries during native dependency builds.
+set "PYTHON=%ORBYTE_PYTHON%"
+set "npm_config_python=%ORBYTE_PYTHON%"
+echo [Orbyte] Using Python at %ORBYTE_PYTHON%.
 exit /b 0
 
 :ensure_cpp_build_tools

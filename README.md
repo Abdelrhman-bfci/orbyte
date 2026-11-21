@@ -61,13 +61,14 @@ pnpm run orbyte:run:windows
 ```
 
 The setup script installs `fnm` with WinGet when necessary, activates Node.js
-24.22.1, installs pnpm 12.16.0, checks for the Visual Studio C++ toolchain, and
-installs the stable Visual Studio Build Tools with the **Desktop development
-with C++** workload and recommended Windows SDK when they are missing. Accept
-the Windows elevation prompt when it appears. The script then installs all
-repository dependencies and stops on the first failed prerequisite. If WinGet
-has just installed `fnm` but Windows has not refreshed `PATH`, close Command
-Prompt, open a new one, and run the setup script again.
+24.22.1, installs pnpm 12.16.0, installs and configures Python 3.13 for
+`node-gyp`, checks for the Visual Studio C++ toolchain, and installs the stable
+Visual Studio Build Tools with the **Desktop development with C++** workload
+and recommended Windows SDK when they are missing. Accept the Windows
+elevation prompt when it appears. The script then installs all repository
+dependencies and stops on the first failed prerequisite. If WinGet has just
+installed a tool but Windows has not refreshed `PATH`, close Command Prompt,
+open a new one, and run the setup script again.
 
 The source build requires development dependencies. The setup script clears a
 machine-wide `NODE_ENV=production`/pnpm production-only setting, installs with
