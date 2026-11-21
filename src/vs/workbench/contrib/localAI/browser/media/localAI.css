@@ -796,35 +796,6 @@
 	-webkit-line-clamp: 2;
 }
 
-.local-ai-subagent-live {
-	display: flex;
-	align-items: flex-start;
-	gap: 5px;
-	margin-top: 5px;
-	padding: 4px 6px;
-	overflow: hidden;
-	font-size: 10px;
-	line-height: 1.35;
-	color: var(--vscode-foreground);
-	background: color-mix(in srgb, var(--vscode-progressBar-background) 12%, transparent);
-	border: 1px solid color-mix(in srgb, var(--vscode-progressBar-background) 30%, transparent);
-	border-radius: 4px;
-}
-
-.local-ai-subagent-live .codicon {
-	flex: none;
-	margin-top: 1px;
-	color: var(--vscode-progressBar-background);
-}
-
-.local-ai-subagent-live span:last-child {
-	display: -webkit-box;
-	min-width: 0;
-	overflow: hidden;
-	-webkit-box-orient: vertical;
-	-webkit-line-clamp: 2;
-}
-
 .local-ai-subagent-files {
 	display: flex;
 	flex-wrap: wrap;
