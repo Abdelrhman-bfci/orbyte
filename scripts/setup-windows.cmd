@@ -204,28 +204,33 @@ call :ensure_cpp_spectre_libraries
 exit /b %errorlevel%
 
 :ensure_cpp_spectre_libraries
-set "ORBYTE_VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
-if not exist "%ORBYTE_VSWHERE%" (
-	echo [Orbyte] Visual Studio Installer discovery tool was not found.
-	echo [Orbyte] Open Visual Studio Installer and add C++ Spectre-mitigated libraries for x64/x86.
-	exit /b 1
-)
+set "ORBYTE_VS_INSTALLER_DIR=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer"
+if exist "%ORBYTE_VS_INSTALLER_DIR%\vswhere.exe" goto vswhere_ready
+echo [Orbyte] Visual Studio Installer discovery tool was not found.
+echo [Orbyte] Open Visual Studio Installer and add C++ Spectre-mitigated libraries for x64/x86.
+exit /b 1
+
+:vswhere_ready
+rem Calling vswhere by its full Program Files (x86) path from FOR /F makes CMD
+rem treat the closing parenthesis in the directory name as command syntax. Put
+rem the installer directory on PATH so the nested commands contain no parentheses.
+set "PATH=%ORBYTE_VS_INSTALLER_DIR%;%PATH%"
 
 set "ORBYTE_VS_INSTALL_PATH="
-for /f "usebackq delims=" %%i in (`"%ORBYTE_VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "ORBYTE_VS_INSTALL_PATH=%%i"
+for /f "delims=" %%i in ('vswhere.exe -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath') do set "ORBYTE_VS_INSTALL_PATH=%%i"
 if not defined ORBYTE_VS_INSTALL_PATH (
 	echo [Orbyte] Could not locate the Visual Studio C++ Build Tools installation.
 	exit /b 1
 )
 
 set "ORBYTE_VS_SPECTRE_PATH="
-for /f "usebackq delims=" %%i in (`"%ORBYTE_VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre -property installationPath`) do set "ORBYTE_VS_SPECTRE_PATH=%%i"
+for /f "delims=" %%i in ('vswhere.exe -latest -products * -requires Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre -property installationPath') do set "ORBYTE_VS_SPECTRE_PATH=%%i"
 if defined ORBYTE_VS_SPECTRE_PATH (
 	echo [Orbyte] C++ Spectre-mitigated libraries are installed.
 	exit /b 0
 )
 
-set "ORBYTE_VS_INSTALLER=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\setup.exe"
+set "ORBYTE_VS_INSTALLER=%ORBYTE_VS_INSTALLER_DIR%\setup.exe"
 if not exist "%ORBYTE_VS_INSTALLER%" (
 	echo [Orbyte] Visual Studio Installer was not found at %ORBYTE_VS_INSTALLER%.
 	exit /b 1
@@ -241,7 +246,7 @@ if not "%ORBYTE_VS_INSTALL_EXIT%"=="0" if not "%ORBYTE_VS_INSTALL_EXIT%"=="3010"
 )
 
 set "ORBYTE_VS_SPECTRE_PATH="
-for /f "usebackq delims=" %%i in (`"%ORBYTE_VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre -property installationPath`) do set "ORBYTE_VS_SPECTRE_PATH=%%i"
+for /f "delims=" %%i in ('vswhere.exe -latest -products * -requires Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre -property installationPath') do set "ORBYTE_VS_SPECTRE_PATH=%%i"
 if not defined ORBYTE_VS_SPECTRE_PATH (
 	echo [Orbyte] Spectre libraries finished installing, but the component was not detected.
 	echo [Orbyte] Restart Windows, then run this script again.
