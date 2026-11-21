@@ -321,9 +321,13 @@ async function buildViewState(selectedId?: string): Promise<IEnvironmentViewStat
 		}
 	}
 	const totalMemoryGb = Math.round(os.totalmem() / 1024 / 1024 / 1024 * 10) / 10;
+	const javaInstalledJdks = await findInstalledJdks();
 	const javaToolingPath = configuredJavaToolingPath();
 	const javaProjectPath = vscode.workspace.getConfiguration('orbyte.java', configurationResource()).get<string>('jdkHome', '');
-	const javaJdkPath = javaProjectPath || javaToolingPath || detectedPaths.java || '';
+	const preferredJavaVersion = Number(configuration.get<Record<string, string>>('preferredVersions', {}).java);
+	const preferredInstalledJdk = javaInstalledJdks.find(jdk => jdk.version === preferredJavaVersion) ?? javaInstalledJdks[0];
+	const configuredProjectHome = isJavaHomeDirectory(javaProjectPath) ? javaProjectPath : '';
+	const javaJdkPath = configuredProjectHome || preferredInstalledJdk?.path || javaToolingPath || detectedPaths.java || '';
 	const javaExecutable = javaJdkPath
 		? resolveJavaExecutable(javaJdkPath)
 		: detectedPaths.java;
@@ -332,7 +336,6 @@ async function buildViewState(selectedId?: string): Promise<IEnvironmentViewStat
 	const javaToolingExecutable = javaToolingPath ? resolveJavaExecutable(javaToolingPath) : undefined;
 	const javaToolingVersion = javaToolingExecutable ? await executableVersion(javaToolingExecutable) : undefined;
 	const javaIdeJdkMajor = javaToolingVersion ? parseJavaMajor(javaToolingVersion) : undefined;
-	const javaInstalledJdks = await findInstalledJdks();
 	return {
 		selectedId: environmentByIdOrLanguage(selectedId)?.id ?? detected?.id ?? 'java',
 		detectedId: detected?.id,
@@ -349,7 +352,7 @@ async function buildViewState(selectedId?: string): Promise<IEnvironmentViewStat
 		javaJdkPath,
 		javaJdkMajor,
 		javaIdeJdkMajor,
-		javaJdkReady: Boolean(javaProjectPath && javaJdkMajor && javaIdeJdkMajor && javaIdeJdkMajor >= 25),
+		javaJdkReady: Boolean(configuredProjectHome && javaJdkMajor && javaIdeJdkMajor && javaIdeJdkMajor >= 25),
 		javaInstalledJdks,
 		environments: environments.map(environment => ({
 			id: environment.id,
@@ -387,6 +390,21 @@ function resolveJavaExecutable(homeOrExecutable: string): string | undefined {
 	}
 	const executable = path.join(homeOrExecutable, 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
 	return existsSync(executable) ? executable : undefined;
+}
+
+function isJavaHomeDirectory(value: string): boolean {
+	if (!value || !existsSync(value)) {
+		return false;
+	}
+	try {
+		if (!statSync(value).isDirectory()) {
+			return false;
+		}
+	} catch {
+		return false;
+	}
+	const suffix = process.platform === 'win32' ? '.exe' : '';
+	return existsSync(path.join(value, 'bin', `java${suffix}`)) && existsSync(path.join(value, 'bin', `javac${suffix}`));
 }
 
 function parseJavaMajor(versionOutput: string): number | undefined {
@@ -512,14 +530,31 @@ async function applyMemory(environment: ILanguageEnvironment, heapMb: number, ta
 	if (environment.memory === 'node') {
 		await settings.update('js/ts.tsserver.maxMemory', heapMb || undefined, target);
 	} else if (environment.memory === 'java') {
-		await settings.update('java.jdt.ls.vmargs', replaceMemoryArg(settings.get<string>('java.jdt.ls.vmargs', ''), heapMb), target);
-		await settings.update('spring-boot.ls.java.vmargs', replaceMemoryArg(settings.get<string>('spring-boot.ls.java.vmargs', ''), heapMb), target);
+		await settings.update('java.jdt.ls.vmargs', replaceMemoryArg(settings.get<unknown>('java.jdt.ls.vmargs'), heapMb), target);
+		await settings.update('spring-boot.ls.java.vmargs', replaceMemoryArg(settings.get<unknown>('spring-boot.ls.java.vmargs'), heapMb), target);
 	}
 }
 
-function replaceMemoryArg(argumentsValue: string, heapMb: number): string {
-	const withoutMaximum = argumentsValue.replace(/(?:^|\s)-Xmx\d+[kKmMgG]?\b/g, '').replace(/\s+/g, ' ').trim();
-	return heapMb ? `${withoutMaximum}${withoutMaximum ? ' ' : ''}-Xmx${heapMb}m` : withoutMaximum;
+function replaceMemoryArg(argumentsValue: unknown, heapMb: number): unknown {
+	if (Array.isArray(argumentsValue)) {
+		const withoutMaximum = argumentsValue
+			.filter((value): value is string => typeof value === 'string')
+			.map(removeMaximumHeapArgument)
+			.filter(Boolean);
+		return heapMb ? [...withoutMaximum, `-Xmx${heapMb}m`] : withoutMaximum;
+	}
+	if (typeof argumentsValue === 'string') {
+		const withoutMaximum = removeMaximumHeapArgument(argumentsValue);
+		return heapMb ? `${withoutMaximum}${withoutMaximum ? ' ' : ''}-Xmx${heapMb}m` : withoutMaximum;
+	}
+	if (argumentsValue !== undefined && argumentsValue !== null) {
+		return argumentsValue;
+	}
+	return heapMb ? `-Xmx${heapMb}m` : undefined;
+}
+
+function removeMaximumHeapArgument(value: string): string {
+	return value.replace(/(?:^|\s)-Xmx\d+[kKmMgG]?\b/g, '').replace(/\s+/g, ' ').trim();
 }
 
 function recommendedHeapMb(): number {
