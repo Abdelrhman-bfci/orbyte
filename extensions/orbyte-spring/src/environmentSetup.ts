@@ -53,7 +53,7 @@ interface IEnvironmentViewState {
 }
 
 const environments: readonly ILanguageEnvironment[] = [
-	{ id: 'java', label: 'Java / JVM', shortLabel: 'Java', languageIds: ['java', 'kotlin', 'groovy'], executables: ['java'], versions: ['25'], recommendedVersion: '25', downloadUrl: 'https://adoptium.net/temurin/releases/', memory: 'java' },
+	{ id: 'java', label: 'Java / JVM', shortLabel: 'Java', languageIds: ['java', 'kotlin', 'groovy'], executables: ['java'], versions: ['27', '26', '25'], recommendedVersion: '25', downloadUrl: 'https://adoptium.net/temurin/releases/', memory: 'java' },
 	{ id: 'node', label: 'JavaScript / TypeScript', shortLabel: 'Node.js', languageIds: ['javascript', 'javascriptreact', 'typescript', 'typescriptreact'], executables: ['node'], versions: ['24', '22', '20'], recommendedVersion: '24', downloadUrl: 'https://nodejs.org/en/download', memory: 'node' },
 	{ id: 'python', label: 'Python', shortLabel: 'Python', languageIds: ['python'], executables: ['python3', 'python'], versions: ['3.14', '3.13', '3.12', '3.11', '3.10'], recommendedVersion: '3.13', selectorCommand: 'python.setInterpreter', downloadUrl: 'https://www.python.org/downloads/', memory: 'none' },
 	{ id: 'cpp', label: 'C / C++', shortLabel: 'C/C++', languageIds: ['c', 'cpp', 'cuda-cpp'], executables: ['clang', 'gcc', 'cl'], versions: ['Clang', 'GCC', 'MSVC'], recommendedVersion: 'Clang', selectorCommand: 'C_Cpp.SelectIntelliSenseConfiguration', downloadUrl: 'https://code.visualstudio.com/docs/cpp/config-mingw', memory: 'none' },

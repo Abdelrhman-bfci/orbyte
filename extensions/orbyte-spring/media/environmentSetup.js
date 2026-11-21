@@ -67,7 +67,7 @@
 					: 'JDK 25 or newer is required for Java tooling and will also build, run, test, and debug this project.';
 		return `
 		<section class="card full"><div class="card-head"><h3>Java Development Kit</h3><p>One JDK runs Orbyte's Java extensions and builds, runs, tests, and debugs this project. JDK 25+ is required.</p></div><div class="card-body">
-			<div class="field"><label>JDK version</label><div class="row"><select id="version">${versionOptions(environment, jdkVersion, ['25'])}</select><button class="button secondary" data-download data-role="unified">Download selected</button></div></div>
+			<div class="field"><label>JDK version</label><div class="row"><select id="version">${versionOptions(environment, jdkVersion)}</select><button class="button secondary" data-download data-role="unified">Download selected</button></div></div>
 			<div class="field"><label>JDK home</label><div class="row">${pathBox(jdkPath, 'No unified JDK selected')}<button class="button ghost" data-local data-role="unified">Select local…</button></div></div>
 			<div class="hint ${state.javaJdkReady ? '' : 'warning'}">${jdkHint}</div>
 		</div></section>`;
