@@ -624,6 +624,8 @@ BUILD_TARGETS.forEach(buildTarget => {
 		const vscodeTaskCI = task.define(`vscode${dashed(platform)}${dashed(arch)}${dashed(minified)}-ci`, task.series(...packageTasks));
 		task.task(vscodeTaskCI);
 
+		// The Linux installer CI discards these maps. Skip their memory-intensive NLS adjustment.
+		const bundleSourceMaps = !(platform === 'linux' && stripSourceMapsInPackagingTasks && !minified);
 		const esbuildBundleTask = task.define(
 			`esbuild-bundle${dashed(platform)}${dashed(arch)}${dashed(minified)}`,
 			() => runEsbuildBundle(
@@ -631,7 +633,8 @@ BUILD_TARGETS.forEach(buildTarget => {
 				!!minified,
 				true,
 				'desktop',
-				minified && useCdnSourceMapsForPackagingTasks ? `${sourceMappingURLBase}/core` : undefined
+				minified && useCdnSourceMapsForPackagingTasks ? `${sourceMappingURLBase}/core` : undefined,
+				bundleSourceMaps
 			)
 		);
 		const vscodeTask = task.define(`vscode${dashed(platform)}${dashed(arch)}${dashed(minified)}`, task.series(

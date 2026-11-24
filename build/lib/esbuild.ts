@@ -49,7 +49,7 @@ export function runEsbuildTranspile(outDir: string, excludeTests: boolean): Prom
 	});
 }
 
-export function runEsbuildBundle(outDir: string, minify: boolean, nls: boolean, target: BuildTarget = 'desktop', sourceMapBaseUrl?: string): Promise<void> {
+export function runEsbuildBundle(outDir: string, minify: boolean, nls: boolean, target: BuildTarget = 'desktop', sourceMapBaseUrl?: string, sourceMaps = true): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const scriptPath = path.join(root, 'build/next/index.ts');
 		const args = [scriptPath, 'bundle', '--out', outDir, '--target', target];
@@ -62,6 +62,9 @@ export function runEsbuildBundle(outDir: string, minify: boolean, nls: boolean, 
 		}
 		if (sourceMapBaseUrl) {
 			args.push('--source-map-base-url', sourceMapBaseUrl);
+		}
+		if (!sourceMaps) {
+			args.push('--no-source-maps');
 		}
 
 		const proc = cp.spawn(process.execPath, args, {

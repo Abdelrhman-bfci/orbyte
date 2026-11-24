@@ -37,6 +37,7 @@ export interface NLSPluginOptions {
 	 * Create with createNLSCollector() and pass to multiple plugin instances.
 	 */
 	collector: NLSCollector;
+	sourceMaps?: boolean;
 }
 
 /**
@@ -424,6 +425,9 @@ export function nlsPlugin(options: NLSPluginOptions): esbuild.Plugin {
 				}
 
 				if (fileEntries.length > 0) {
+					if (options.sourceMaps === false) {
+						return { contents: code, loader: 'ts' };
+					}
 					// Generate a source map that maps from the NLS-transformed source
 					// back to the original. Embed it inline so esbuild composes it
 					// with its own bundle source map, making the final map point to

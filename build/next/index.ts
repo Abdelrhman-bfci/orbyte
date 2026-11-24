@@ -56,6 +56,7 @@ const options = {
 	minify: process.argv.includes('--minify'),
 	nls: process.argv.includes('--nls'),
 	manglePrivates: process.argv.includes('--mangle-privates'),
+	sourceMaps: !process.argv.includes('--no-source-maps'),
 	excludeTests: process.argv.includes('--exclude-tests'),
 	force: process.argv.includes('--force'),
 	clientOnly: process.argv.includes('--client-only'),
@@ -492,6 +493,7 @@ async function bundle(outDir: string, doMinify: boolean, doNls: boolean, doMangl
 
 async function bundleToOutput(outDir: string, doMinify: boolean, doNls: boolean, doManglePrivates: boolean, target: BuildTarget, sourceMapBaseUrl?: string): Promise<void> {
 	const mobile = target === 'mobile';
+	const sourceMaps = mobile || options.sourceMaps;
 	await cleanDir(outDir);
 
 	// Write build date file (used by packaging to embed in product.json).
@@ -508,7 +510,7 @@ async function bundleToOutput(outDir: string, doMinify: boolean, doNls: boolean,
 	}
 	await fs.promises.writeFile(path.join(outDirPath, 'date'), buildDate, 'utf8');
 
-	console.log(`[bundle] ${SRC_DIR} → ${outDir} (target: ${target})${doMinify ? ' (minify)' : ''}${doNls ? ' (nls)' : ''}${doManglePrivates ? ' (mangle-privates)' : ''}`);
+	console.log(`[bundle] ${SRC_DIR} → ${outDir} (target: ${target})${doMinify ? ' (minify)' : ''}${doNls ? ' (nls)' : ''}${doManglePrivates ? ' (mangle-privates)' : ''}${sourceMaps ? '' : ' (no source maps)'}`);
 	const t1 = Date.now();
 
 	// Create shared NLS collector (only used if doNls is true)
@@ -525,6 +527,7 @@ async function bundleToOutput(outDir: string, doMinify: boolean, doNls: boolean,
 
 	// Create the file content mapper plugin (injects product config, builtin extensions)
 	const contentMapperPlugin = fileContentMapperPlugin(outDir, target);
+	const nlsOptions = { baseDir: path.join(REPO_ROOT, SRC_DIR), collector: nlsCollector, sourceMaps };
 
 	// Bundle each entry point directly from TypeScript source
 	const bundleEntryPoint = async (entryPoint: string) => {
@@ -539,10 +542,7 @@ async function bundleToOutput(outDir: string, doMinify: boolean, doNls: boolean,
 		// Add content mapper plugin to inject product config and builtin extensions
 		plugins.push(contentMapperPlugin);
 		if (doNls) {
-			plugins.unshift(nlsPlugin({
-				baseDir: path.join(REPO_ROOT, SRC_DIR),
-				collector: nlsCollector,
-			}));
+			plugins.unshift(nlsPlugin(nlsOptions));
 		}
 
 		// For entry points that bundle CSS, we need to use outdir instead of outfile
@@ -551,6 +551,7 @@ async function bundleToOutput(outDir: string, doMinify: boolean, doNls: boolean,
 
 		const buildOptions: esbuild.BuildOptions = {
 			...getBundleOptions(doMinify, 'neutral'),
+			sourcemap: sourceMaps && 'linked',
 			...(mobile ? { absWorkingDir: REPO_ROOT, metafile: true } : {}),
 			entryPoints: needsCssBundling
 				? [{ in: entryPath, out: entryPoint }]
@@ -590,14 +591,12 @@ async function bundleToOutput(outDir: string, doMinify: boolean, doNls: boolean,
 			bootstrapPlugins.push(mainImplExternalPlugin());
 		}
 		if (doNls) {
-			bootstrapPlugins.unshift(nlsPlugin({
-				baseDir: path.join(REPO_ROOT, SRC_DIR),
-				collector: nlsCollector,
-			}));
+			bootstrapPlugins.unshift(nlsPlugin(nlsOptions));
 		}
 
 		const result = await esbuild.build({
 			...getBundleOptions(doMinify, 'node'),
+			sourcemap: sourceMaps && 'linked',
 			entryPoints: [entryPath],
 			outfile: outPath,
 			plugins: bootstrapPlugins,
@@ -625,6 +624,7 @@ async function bundleToOutput(outDir: string, doMinify: boolean, doNls: boolean,
 	const mangleEdits = new Map<string, { preMangleCode: string; edits: readonly import('./private-to-property.ts').TextEdit[] }>();
 	// Map from JS file path to pre-NLS content + edits, for source map adjustment
 	const nlsEdits = new Map<string, { preNLSCode: string; edits: readonly import('./private-to-property.ts').TextEdit[] }>();
+	const postProcessedFiles = new Set<string>();
 	// Defer .map files until all .js files are processed, because esbuild may
 	// emit the .map file in a different build result than the .js file (e.g.
 	// code-split chunks), and we need the NLS/mangle edits from the .js pass
@@ -652,7 +652,10 @@ async function bundleToOutput(outDir: string, doMinify: boolean, doNls: boolean,
 					content = mangleResult.code;
 					if (mangleResult.editCount > 0) {
 						mangleStats.push({ file: path.relative(path.join(REPO_ROOT, outDir), file.path), result: mangleResult });
-						mangleEdits.set(file.path, { preMangleCode, edits: mangleResult.edits });
+						postProcessedFiles.add(file.path);
+						if (sourceMaps) {
+							mangleEdits.set(file.path, { preMangleCode, edits: mangleResult.edits });
+						}
 					}
 				}
 
@@ -662,7 +665,10 @@ async function bundleToOutput(outDir: string, doMinify: boolean, doNls: boolean,
 					const nlsResult = postProcessNLS(content, indexMap, preserveEnglish);
 					content = nlsResult.code;
 					if (nlsResult.edits.length > 0) {
-						nlsEdits.set(file.path, { preNLSCode, edits: nlsResult.edits });
+						postProcessedFiles.add(file.path);
+						if (sourceMaps) {
+							nlsEdits.set(file.path, { preNLSCode, edits: nlsResult.edits });
+						}
 					}
 				}
 
@@ -706,7 +712,6 @@ async function bundleToOutput(outDir: string, doMinify: boolean, doNls: boolean,
 	// These steps do raw string surgery on bundled JS so a bug could silently
 	// produce syntactically broken output. Catch it here at build time.
 	// Uses esbuild.transform() as a parser since the bundles are ESM.
-	const postProcessedFiles = new Set([...mangleEdits.keys(), ...nlsEdits.keys()]);
 	if (postProcessedFiles.size > 0) {
 		const errors: { rel: string; message: string }[] = [];
 		// Parse these large bundles one at a time. Starting every transform at once
@@ -910,6 +915,7 @@ Options for 'bundle':
 	--minify           Minify bundles, copied JavaScript resources, and SVG assets
 	--nls              Process NLS (localization) strings
 	--mangle-privates  Convert native #private fields to regular properties
+	--no-source-maps  Skip source maps for the workbench and bootstrap bundles
 	--out <dir>        Output directory (default: out-vscode)
 	--target <target>  Build target: desktop (default), server, server-web, web
 	--source-map-base-url <url>  Rewrite sourceMappingURL to CDN URL
