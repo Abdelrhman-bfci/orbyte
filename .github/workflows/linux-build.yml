@@ -1,0 +1,130 @@
+name: Build and test Linux application
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/linux-build.yml
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runs-on: ubuntu-24.04
+          - arch: arm64
+            runs-on: ubuntu-24.04-arm
+    env:
+      NODE_OPTIONS: --max-old-space-size=8192
+      npm_config_arch: ${{ matrix.arch }}
+
+    steps:
+      - name: Check out Orbyte
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install Linux build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            fakeroot \
+            g++ \
+            libasound2 \
+            libgbm1 \
+            libgomp1 \
+            libgtk-3-0 \
+            libkrb5-dev \
+            libnss3 \
+            libsecret-1-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxkbfile-dev \
+            pkg-config \
+            python-is-python3 \
+            rpm
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install pinned pnpm
+        run: npm install --global pnpm@12.16.0
+
+      - name: Resolve pnpm store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-linux-${{ matrix.arch }}-${{ hashFiles('pnpm-lock.yaml', 'build/pnpm-lock.yaml', 'extensions/copilot/pnpm-lock.yaml') }}
+          restore-keys: pnpm-linux-${{ matrix.arch }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare Linux local AI runtime
+        run: pnpm run "orbyte:runtime:linux:${{ matrix.arch }}"
+
+      - name: Package native Linux application
+        run: pnpm run "orbyte:build:linux:${{ matrix.arch }}"
+
+      - name: Validate build and create release tarball
+        run: |
+          set -euo pipefail
+          ARCH="${{ matrix.arch }}"
+          PORTABLE_DIR="$(cd .. && pwd)/VSCode-linux-${ARCH}"
+          ARTIFACT_DIR="${PWD}/linux-${ARCH}-artifacts"
+          mkdir -p "${ARTIFACT_DIR}"
+
+          APP_NAME="$(node -p "require('${PORTABLE_DIR}/resources/app/product.json').applicationName")"
+          APP_BIN="${PORTABLE_DIR}/${APP_NAME}"
+          if [[ ! -f "${APP_BIN}" ]]; then
+            echo "Expected application binary is missing: ${APP_BIN}"
+            exit 1
+          fi
+          if [[ ! -x "${APP_BIN}" ]]; then
+            chmod +x "${APP_BIN}"
+          fi
+
+          if find "${PORTABLE_DIR}" -type f \( -name '*.gguf' -o -name '*.safetensors' \) | grep -q .; then
+            echo "The package unexpectedly contains local LLM model files."
+            find "${PORTABLE_DIR}" -type f \( -name '*.gguf' -o -name '*.safetensors' \)
+            exit 1
+          fi
+          echo "Confirmed that no local LLM model files are bundled."
+
+          VERSION_OUTPUT="$("${APP_BIN}" --version 2>&1 || true)"
+          if [[ -z "${VERSION_OUTPUT// }" ]]; then
+            echo "Orbyte --version returned no output."
+            exit 1
+          fi
+          echo "Built Orbyte version: ${VERSION_OUTPUT}"
+
+          ARCHIVE_NAME="Orbyte-linux-${ARCH}.tar.gz"
+          tar -C "$(dirname "${PORTABLE_DIR}")" -czf "${ARTIFACT_DIR}/${ARCHIVE_NAME}" "VSCode-linux-${ARCH}"
+          sha256sum "${ARTIFACT_DIR}/${ARCHIVE_NAME}" | tee "${ARTIFACT_DIR}/${ARCHIVE_NAME}.sha256"
+
+      - name: Upload Linux application tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: Orbyte-Linux-${{ matrix.arch }}-tarball
+          path: linux-${{ matrix.arch }}-artifacts/*
+          if-no-files-found: error
+          retention-days: 14
