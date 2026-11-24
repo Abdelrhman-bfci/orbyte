@@ -14,6 +14,8 @@ export type LocalLLMServerState = 'stopped' | 'starting' | 'ready' | 'stopping' 
 export type LocalLLMModelRecommendation = 'recommended' | 'compatible';
 export type LocalLLMModelDownloadState = 'downloading' | 'verifying' | 'complete' | 'cancelled' | 'error';
 export type LocalAIProviderId = 'local' | 'codex' | 'cursor' | 'claude';
+export type LocalAIExternalProviderId = Exclude<LocalAIProviderId, 'local'>;
+export type LocalAIProviderAuthState = 'notRequired' | 'signedIn' | 'signedOut' | 'unknown';
 
 export interface ILocalAIProviderInfo {
 	readonly id: LocalAIProviderId;
@@ -21,6 +23,8 @@ export interface ILocalAIProviderInfo {
 	readonly description: string;
 	readonly command: string;
 	readonly installed: boolean;
+	readonly authState: LocalAIProviderAuthState;
+	readonly setupUrl?: string;
 	readonly selected: boolean;
 }
 
@@ -88,6 +92,7 @@ export interface ILocalLLMChatMessage {
 
 export interface ILocalLLMChatRequest {
 	readonly requestId: string;
+	readonly providerId?: LocalAIProviderId;
 	readonly messages: readonly ILocalLLMChatMessage[];
 	readonly maxTokens?: number;
 	readonly temperature?: number;
@@ -114,11 +119,20 @@ export interface ILocalLLMStreamEndEvent {
 	readonly error?: string;
 }
 
+export interface ILocalAISyntaxCheck {
+	readonly path: string;
+	readonly content: string;
+	readonly originalContent?: string;
+}
+
+export type ILocalAISyntaxResult = { readonly status: 'passed' | 'skipped' } | { readonly status: 'failed'; readonly diagnostic: string };
+
 export interface ILocalLLMService {
 	readonly _serviceBrand: undefined;
 
 	readonly onDidChangeState: Event<ILocalLLMServerInfo>;
 	readonly onDidChangeModels: Event<ILocalLLMModelCatalog>;
+	readonly onDidChangeProviders: Event<ILocalAIProviderCatalog>;
 	readonly onDidDownloadModel: Event<ILocalLLMModelDownloadEvent>;
 	readonly onDidStreamToken: Event<ILocalLLMStreamTokenEvent>;
 	readonly onDidStreamEnd: Event<ILocalLLMStreamEndEvent>;
@@ -126,7 +140,10 @@ export interface ILocalLLMService {
 	getState(): Promise<ILocalLLMServerInfo>;
 	getModelCatalog(): Promise<ILocalLLMModelCatalog>;
 	getProviderCatalog(): Promise<ILocalAIProviderCatalog>;
+	checkFileSyntax(file: ILocalAISyntaxCheck): Promise<ILocalAISyntaxResult>;
 	selectProvider(providerId: LocalAIProviderId): Promise<ILocalAIProviderCatalog>;
+	signInToProvider(providerId: LocalAIExternalProviderId): Promise<ILocalAIProviderCatalog>;
+	cancelProviderSignIn(providerId: LocalAIExternalProviderId): Promise<void>;
 	selectModel(modelId: string): Promise<ILocalLLMModelCatalog>;
 	downloadModel(modelId: string): Promise<void>;
 	cancelModelDownload(modelId: string): Promise<void>;

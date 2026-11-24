@@ -50,6 +50,7 @@
       { "command": "orbyte.environment.configure", "title": "Language Environment Setup…", "category": "Orbyte", "icon": "$(tools)" },
       { "command": "orbyte.java.configureJdk", "title": "Java SDK Setup…", "category": "Orbyte", "icon": "$(coffee)" },
       { "command": "orbyte.run.configure", "title": "Edit Run Configurations…", "category": "Orbyte", "icon": "$(settings-gear)" },
+      { "command": "orbyte.run.toggleOffline", "title": "Toggle Offline Project Mode", "category": "Orbyte" },
       { "command": "orbyte.run.select", "title": "Select Run Configuration…", "category": "Orbyte", "icon": "$(list-selection)" },
       { "command": "orbyte.run.runSelected", "title": "Run Selected Configuration", "category": "Orbyte", "icon": "$(run-all)" },
       { "command": "orbyte.run.debugSelected", "title": "Debug Selected Configuration", "category": "Orbyte", "icon": "$(debug-alt)" },
@@ -179,7 +180,26 @@
         "orbyte.hotReload.delay": { "type": "number", "default": 900, "minimum": 100, "maximum": 10000, "scope": "window", "description": "Debounce delay in milliseconds before hot reload runs after a file is saved." },
         "orbyte.hotReload.command": { "type": "string", "default": "", "scope": "resource", "description": "Optional workspace command used to reload a framework or server that is not already handled by Orbyte. Active debug sessions are restarted automatically when this is empty." },
         "orbyte.hotReload.enterpriseServer": { "type": "string", "default": "auto", "enum": ["auto", "wildfly", "websphere"], "scope": "resource", "description": "Application server used for automatic EJB, EAR, and WAR redeployment." },
-        "orbyte.run.configurations": { "type": "array", "default": [], "scope": "window", "description": "Named single-application and compound Run Configurations managed by Orbyte.", "items": { "type": "object", "required": ["name", "applications"], "properties": { "name": { "type": "string" }, "applications": { "type": "array", "items": { "type": "string" } }, "programArgs": { "type": "object", "additionalProperties": { "type": "string" } }, "commandOverrides": { "type": "object", "additionalProperties": { "type": "string" } } } } },
+        "orbyte.run.offline": { "type": "boolean", "default": false, "scope": "window", "description": "Use local build tools and cached dependencies for supported Orbyte launchers." },
+        "orbyte.run.configurations": {
+          "type": "array", "default": [], "scope": "window", "description": "Named single-application and compound Run Configurations managed by Orbyte.",
+          "items": { "type": "object", "required": ["name", "applications"], "properties": {
+            "name": { "type": "string" },
+            "applications": { "type": "array", "items": { "type": "string" } },
+            "programArgs": { "type": "object", "additionalProperties": { "type": "string" } },
+            "commandOverrides": { "type": "object", "additionalProperties": { "type": "string" } },
+            "servers": { "type": "object", "additionalProperties": {
+              "type": "object", "required": ["kind", "home", "debugPort"], "properties": {
+                "kind": { "type": "string", "enum": ["wildfly", "websphere"] },
+                "home": { "type": "string" },
+                "serverName": { "type": "string" },
+                "debugPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                "managementPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                "artifact": { "type": "string" }
+              }
+            } }
+          } }
+        },
         "orbyte.run.selectedConfiguration": { "type": "string", "default": "", "scope": "window", "description": "Name of the active Orbyte Run Configuration." },
         "orbyte.enterprise.projectServers": { "type": "object", "default": {}, "scope": "window", "additionalProperties": { "type": "string", "enum": ["wildfly", "websphere"] }, "description": "Application server selected for each enterprise project root." },
         "orbyte.enterprise.wildfly.home": { "type": "string", "default": "", "scope": "resource", "description": "JBoss EAP or WildFly installation directory containing bin/standalone." },

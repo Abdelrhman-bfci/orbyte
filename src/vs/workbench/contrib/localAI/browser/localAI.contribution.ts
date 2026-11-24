@@ -125,7 +125,7 @@ class LocalAIFloatingChatService extends Disposable implements ILocalAIFloatingC
 		const title = dom.append(brand, dom.$('span.local-ai-floating-title'));
 		title.textContent = localize('localAIFloatingTitle', "Orbyte AI");
 		const privacy = dom.append(brand, dom.$('span.local-ai-floating-privacy'));
-		privacy.textContent = localize('localAIFloatingPrivacy', "Local / CLI");
+		privacy.textContent = localize('localAIFloatingPrivacy', "Local / Cloud");
 
 		const headerActions = dom.append(floatingHeader, dom.$('.local-ai-floating-header-actions'));
 		const settingsButton = dom.append(headerActions, dom.$<HTMLButtonElement>('button.local-ai-floating-settings.codicon.codicon-settings-gear'));

@@ -228,8 +228,27 @@
 .local-ai-provider-command {
 	margin-top: 8px;
 	color: var(--vscode-descriptionForeground);
-	font-family: var(--monaco-monospace-font);
-	font-size: 10px;
+	font-size: 11px;
+}
+
+.local-ai-provider-actions {
+	display: flex;
+	align-items: center;
+	flex-shrink: 0;
+	gap: 6px;
+}
+
+.local-ai-provider-actions .local-ai-button {
+	white-space: nowrap;
+}
+
+.local-ai-provider-status:not(:empty) {
+	margin-bottom: 10px;
+	color: var(--vscode-descriptionForeground);
+}
+
+.local-ai-provider-help {
+	margin-top: 6px;
 }
 
 .local-ai-floating-tabs {
@@ -1325,6 +1344,7 @@
 }
 
 .local-ai-change-set {
+	flex: none;
 	margin-bottom: var(--vscode-spacing-size160);
 	border: 1px solid var(--vscode-widget-border);
 	border-radius: var(--vscode-cornerRadius-small);
@@ -1361,8 +1381,32 @@
 	font-size: 11px;
 }
 
-.local-ai-change-set-actions {
-	margin-left: auto;
+.local-ai-change-review-bar {
+	flex: none;
+	margin: 0 12px 8px;
+	padding: 8px;
+	border: 1px solid var(--vscode-focusBorder);
+	border-radius: var(--vscode-cornerRadius-small);
+	background: var(--vscode-editorWidget-background);
+}
+
+.local-ai-change-review-row,
+.local-ai-change-review-actions {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.local-ai-change-review-status {
+	flex: 1 0 auto;
+	font-weight: var(--vscode-fontWeight-semiBold);
+}
+
+.local-ai-change-review-error {
+	margin-top: 6px;
+	color: var(--vscode-errorForeground);
+	overflow-wrap: anywhere;
 }
 
 .local-ai-change-added {
@@ -1373,7 +1417,6 @@
 	color: var(--vscode-gitDecoration-deletedResourceForeground);
 }
 
-.local-ai-change-set-actions,
 .local-ai-change-file-actions {
 	display: flex;
 	gap: var(--vscode-spacing-size40);

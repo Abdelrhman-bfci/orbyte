@@ -18,11 +18,18 @@ import { Disposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { join } from '../../../base/common/path.js';
 import { isWindows } from '../../../base/common/platform.js';
 import { toErrorMessage } from '../../../base/common/errorMessage.js';
+import { IConfigurationService } from '../../configuration/common/configuration.js';
+import { IEncryptionMainService } from '../../encryption/common/encryptionService.js';
 import { IEnvironmentMainService } from '../../environment/electron-main/environmentMainService.js';
 import { ILifecycleMainService } from '../../lifecycle/electron-main/lifecycleMainService.js';
 import { ILogService } from '../../log/common/log.js';
-import { ILocalAIProviderCatalog, ILocalAIProviderInfo, ILocalLLMChatRequest, ILocalLLMFimRequest, ILocalLLMModelCatalog, ILocalLLMModelDownloadEvent, ILocalLLMModelInfo, ILocalLLMServerInfo, ILocalLLMService, ILocalLLMStreamEndEvent, ILocalLLMStreamTokenEvent, LocalAIProviderId } from '../common/localLLM.js';
+import { getResolvedShellEnv } from '../../shell/node/shellEnv.js';
+import { IApplicationStorageMainService } from '../../storage/electron-main/storageMainService.js';
+import { ILocalAIProviderCatalog, ILocalAIProviderInfo, ILocalAISyntaxCheck, ILocalAISyntaxResult, ILocalLLMChatRequest, ILocalLLMFimRequest, ILocalLLMModelCatalog, ILocalLLMModelDownloadEvent, ILocalLLMModelInfo, ILocalLLMServerInfo, ILocalLLMService, ILocalLLMStreamEndEvent, ILocalLLMStreamTokenEvent, LocalAIExternalProviderId, LocalAIProviderId } from '../common/localLLM.js';
 import { getLocalLLMContextWindowTokens } from '../common/localLLMContextProfile.js';
+import { CursorAIProvider } from './cursorAIProvider.js';
+import { checkProviderAuth, findProviderCommand, getExternalAIProvider, LocalAICliProviderId, spawnProviderCommand } from './localAIProviders.js';
+import { checkLocalAIFileSyntax } from './localAISyntaxCheck.js';
 
 const readinessTimeout = 120_000;
 const gracefulShutdownTimeout = 2_000;
@@ -31,6 +38,7 @@ interface IActiveRequest {
 	cancelled: boolean;
 	request?: ClientRequest;
 	process?: ChildProcess;
+	controller?: AbortController;
 }
 
 interface IServerPaths {
@@ -64,12 +72,7 @@ interface IModelState {
 	readonly selectedProviderId?: LocalAIProviderId;
 }
 
-const externalProviderDefinitions: readonly Omit<ILocalAIProviderInfo, 'installed' | 'selected'>[] = [
-	{ id: 'local', name: 'Local', description: 'Private on-device Qwen model', command: '' },
-	{ id: 'codex', name: 'Codex', description: 'Use your installed and signed-in Codex CLI', command: 'codex' },
-	{ id: 'cursor', name: 'Cursor', description: 'Use your installed and signed-in Cursor Agent CLI', command: 'agent' },
-	{ id: 'claude', name: 'Claude', description: 'Use your installed and signed-in Claude Code CLI', command: 'claude' },
-];
+const externalProviderIds: readonly LocalAIExternalProviderId[] = ['codex', 'cursor', 'claude'];
 
 const gibibyte = 1024 * 1024 * 1024;
 const modelDefinitions: readonly IModelDefinition[] = [
@@ -150,6 +153,9 @@ export class LocalLLMMainService extends Disposable implements ILocalLLMService 
 	private readonly _onDidChangeModels = this._register(new Emitter<ILocalLLMModelCatalog>());
 	readonly onDidChangeModels = this._onDidChangeModels.event;
 
+	private readonly _onDidChangeProviders = this._register(new Emitter<ILocalAIProviderCatalog>());
+	readonly onDidChangeProviders = this._onDidChangeProviders.event;
+
 	private readonly _onDidDownloadModel = this._register(new Emitter<ILocalLLMModelDownloadEvent>());
 	readonly onDidDownloadModel = this._onDidDownloadModel.event;
 
@@ -165,6 +171,8 @@ export class LocalLLMMainService extends Disposable implements ILocalLLMService 
 	private _isStopping = false;
 	private readonly _activeRequests = new Map<string, IActiveRequest>();
 	private readonly _modelDownloads = new Map<string, AbortController>();
+	private readonly _providerSignIns = new Map<LocalAIExternalProviderId, AbortController>();
+	private readonly _cursorProvider: CursorAIProvider;
 	private _modelState: IModelState | undefined;
 	private _selectModelPromise: Promise<ILocalLLMModelCatalog> | undefined;
 
@@ -172,14 +180,21 @@ export class LocalLLMMainService extends Disposable implements ILocalLLMService 
 		@IEnvironmentMainService private readonly _environmentMainService: IEnvironmentMainService,
 		@ILifecycleMainService lifecycleMainService: ILifecycleMainService,
 		@ILogService private readonly _logService: ILogService,
+		@IConfigurationService private readonly _configurationService: IConfigurationService,
+		@IEncryptionMainService encryptionService: IEncryptionMainService,
+		@IApplicationStorageMainService applicationStorage: IApplicationStorageMainService,
 	) {
 		super();
+		this._cursorProvider = new CursorAIProvider(encryptionService, applicationStorage);
 
 		this._register(lifecycleMainService.onWillShutdown(event => {
 			event.join('localLLM', this.stopServer());
 		}));
 
-		const onWillQuit = () => this._forceKill();
+		const onWillQuit = () => {
+			this._abortProviderSignIns();
+			this._forceKill();
+		};
 		app.on('will-quit', onWillQuit);
 		this._register(toDisposable(() => app.removeListener('will-quit', onWillQuit)));
 	}
@@ -188,35 +203,128 @@ export class LocalLLMMainService extends Disposable implements ILocalLLMService 
 		return this._state;
 	}
 
+	checkFileSyntax(file: ILocalAISyntaxCheck): Promise<ILocalAISyntaxResult> {
+		return checkLocalAIFileSyntax(file);
+	}
+
 	async getProviderCatalog(): Promise<ILocalAIProviderCatalog> {
 		const state = await this._readModelState();
 		const selectedProviderId = state.selectedProviderId ?? 'local';
-		const providers = await Promise.all(externalProviderDefinitions.map(async provider => ({
-			...provider,
-			installed: provider.id === 'local' || await this._commandAvailable(provider.command),
-			selected: provider.id === selectedProviderId,
-		})));
-		return { selectedProviderId, providers };
+		const env = await this._providerEnvironment();
+		const providers = await Promise.all(externalProviderIds.map(id => this._providerInfo(id, selectedProviderId, env)));
+		return {
+			selectedProviderId,
+			providers: [
+				{ id: 'local', name: 'Local', description: 'Private on-device Qwen model', command: '', installed: true, selected: selectedProviderId === 'local', authState: 'notRequired' },
+				...providers,
+			],
+		};
 	}
 
 	async selectProvider(providerId: LocalAIProviderId): Promise<ILocalAIProviderCatalog> {
-		const provider = externalProviderDefinitions.find(candidate => candidate.id === providerId);
-		if (!provider) {
-			throw new Error(`Unknown AI provider: ${providerId}.`);
+		if (providerId !== 'local') {
+			const provider = await this._providerInfo(providerId, providerId, await this._providerEnvironment());
+			if (!provider.installed || provider.authState !== 'signedIn') {
+				throw new Error(`Complete ${provider.name} sign-in before using it in Orbyte.`);
+			}
 		}
-		if (provider.id !== 'local' && !await this._commandAvailable(provider.command)) {
-			throw new Error(`${provider.name} CLI is not installed or is not available on PATH.`);
+		if (this._activeRequests.size) {
+			throw new Error('Wait for active AI requests to finish before switching providers.');
 		}
 		const state = await this._readModelState();
 		await this._writeModelState({ ...state, selectedProviderId: providerId });
 		if (providerId === 'local') {
 			if (state.setupComplete) {
-				await this.startServer();
+				await this.startServer().catch(() => { /* The local model state reports the startup error. */ });
 			}
 		} else {
 			await this.stopServer();
 		}
-		return this.getProviderCatalog();
+		const catalog = await this.getProviderCatalog();
+		this._onDidChangeProviders.fire(catalog);
+		return catalog;
+	}
+
+	private async _providerEnvironment(): Promise<NodeJS.ProcessEnv> {
+		const shellEnv = await getResolvedShellEnv(this._configurationService, this._logService, this._environmentMainService.args, process.env).catch(() => ({}));
+		return { ...process.env, ...shellEnv };
+	}
+
+	private async _providerInfo(id: LocalAIExternalProviderId, selectedProviderId: LocalAIProviderId, env: NodeJS.ProcessEnv): Promise<ILocalAIProviderInfo> {
+		if (id === 'cursor') {
+			const apiKey = await this._cursorProvider.getApiKey().catch(() => undefined);
+			return {
+				id, name: 'Cursor', description: 'Connect your Cursor account in the browser', command: '',
+				installed: true, selected: id === selectedProviderId, authState: apiKey ? 'signedIn' : 'signedOut',
+			};
+		}
+		const definition = getExternalAIProvider(id);
+		const executable = await findProviderCommand(id, env);
+		return {
+			id, name: definition.name, description: definition.description, command: definition.commands.at(-1)!, setupUrl: definition.setupUrl,
+			installed: Boolean(executable), selected: id === selectedProviderId,
+			authState: executable ? await checkProviderAuth(id, executable, env) : 'unknown',
+		};
+	}
+
+	async signInToProvider(providerId: LocalAIExternalProviderId): Promise<ILocalAIProviderCatalog> {
+		if (this._providerSignIns.has(providerId)) {
+			throw new Error('Sign-in is already in progress for this provider.');
+		}
+		const controller = new AbortController();
+		this._providerSignIns.set(providerId, controller);
+		try {
+			if (providerId === 'cursor') {
+				await this._cursorProvider.signIn(controller.signal);
+			} else {
+				await this._signInToCliProvider(providerId, controller.signal);
+			}
+		} catch (error) {
+			if (!controller.signal.aborted) {
+				throw error;
+			}
+		} finally {
+			this._providerSignIns.delete(providerId);
+		}
+		const catalog = await this.getProviderCatalog();
+		this._onDidChangeProviders.fire(catalog);
+		return catalog;
+	}
+
+	private async _signInToCliProvider(providerId: LocalAICliProviderId, signal: AbortSignal): Promise<void> {
+		const definition = getExternalAIProvider(providerId);
+		const env = await this._providerEnvironment();
+		const executable = await findProviderCommand(providerId, env);
+		if (signal.aborted) {
+			return;
+		}
+		if (!executable) {
+			throw new Error(`Install the ${definition.name} CLI first.`);
+		}
+		await new Promise<void>((resolve, reject) => {
+			const child = spawnProviderCommand(executable, definition.loginArgs, { ...env, NO_OPEN_BROWSER: undefined }, undefined, 'ignore');
+			const cancel = () => { child.kill(); finish(); };
+			const finish = (error?: Error) => {
+				clearTimeout(timer);
+				signal.removeEventListener('abort', cancel);
+				if (error) {
+					reject(error);
+				} else {
+					resolve();
+				}
+			};
+			const timer = setTimeout(() => {
+				child.kill();
+				finish(new Error('Sign-in timed out. Try again or use the provider’s sign-in instructions.'));
+			}, 5 * 60_000);
+			signal.addEventListener('abort', cancel, { once: true });
+			child.once('error', () => finish(new Error('The sign-in command could not start.')));
+			child.once('close', code => finish(code === 0 ? undefined : new Error('Sign-in did not finish. Try again or use the provider’s sign-in instructions.')));
+		});
+	}
+
+	async cancelProviderSignIn(providerId: LocalAIExternalProviderId): Promise<void> {
+		this._providerSignIns.get(providerId)?.abort();
 	}
 
 	async getModelCatalog(): Promise<ILocalLLMModelCatalog> {
@@ -537,7 +645,12 @@ export class LocalLLMMainService extends Disposable implements ILocalLLMService 
 	}
 
 	async streamChat(chatRequest: ILocalLLMChatRequest): Promise<string> {
-		const provider = (await this._readModelState()).selectedProviderId ?? 'local';
+		const provider = chatRequest.providerId ?? (await this._readModelState()).selectedProviderId ?? 'local';
+		if (provider === 'cursor') {
+			this._prepareRequest(chatRequest.requestId);
+			void this._streamCursor(chatRequest);
+			return chatRequest.requestId;
+		}
 		if (provider !== 'local') {
 			return this._streamExternalProvider(provider, chatRequest);
 		}
@@ -588,6 +701,7 @@ export class LocalLLMMainService extends Disposable implements ILocalLLMService 
 		activeRequest.cancelled = true;
 		activeRequest.request?.destroy();
 		activeRequest.process?.kill('SIGTERM');
+		activeRequest.controller?.abort();
 		this._activeRequests.delete(requestId);
 		this._onDidStreamEnd.fire({ requestId, cancelled: true });
 	}
@@ -602,44 +716,71 @@ export class LocalLLMMainService extends Disposable implements ILocalLLMService 
 		this._activeRequests.set(requestId, { cancelled: false });
 	}
 
-	private async _streamExternalProvider(providerId: Exclude<LocalAIProviderId, 'local'>, chatRequest: ILocalLLMChatRequest): Promise<string> {
+	private async _streamCursor(chatRequest: ILocalLLMChatRequest): Promise<void> {
+		const { requestId } = chatRequest;
+		const activeRequest = this._activeRequests.get(requestId)!;
+		const controller = new AbortController();
+		activeRequest.controller = controller;
+		let error: string | undefined;
+		try {
+			const apiKey = await this._cursorProvider.getApiKey();
+			if (!apiKey) {
+				error = 'Cursor sign-in is required. Reconnect from AI provider settings.';
+			} else {
+				const prompt = chatRequest.messages.map(message => `<${message.role}>\n${message.content}\n</${message.role}>`).join('\n\n');
+				error = await this._cursorProvider.stream(apiKey, prompt, controller.signal, token => this._onDidStreamToken.fire({ requestId, token }));
+			}
+		} catch {
+			error = 'Cursor could not complete the request. Check your connection and sign-in.';
+		} finally {
+			if (this._activeRequests.get(requestId) === activeRequest) {
+				this._activeRequests.delete(requestId);
+				this._onDidStreamEnd.fire({ requestId, cancelled: false, error });
+			}
+		}
+		if (error && !controller.signal.aborted) {
+			void this.getProviderCatalog().then(catalog => this._onDidChangeProviders.fire(catalog), () => { });
+		}
+	}
+
+	private async _streamExternalProvider(providerId: LocalAICliProviderId, chatRequest: ILocalLLMChatRequest): Promise<string> {
+		const definition = getExternalAIProvider(providerId);
 		this._prepareRequest(chatRequest.requestId);
 		const activeRequest = this._activeRequests.get(chatRequest.requestId)!;
 		const prompt = chatRequest.messages.map(message => `<${message.role}>\n${message.content}\n</${message.role}>`).join('\n\n');
-		const cwd = chatRequest.cwd || process.cwd();
-		const definition = externalProviderDefinitions.find(candidate => candidate.id === providerId)!;
-		const args = providerId === 'codex'
-			? ['exec', '--json', '--sandbox', 'read-only', '--ephemeral', '--skip-git-repo-check', '-']
-			: providerId === 'cursor'
-				? ['-p', '--output-format', 'stream-json', '--stream-partial-output']
-				: ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
-		const child = spawn(definition.command, args, {
-			cwd,
-			env: process.env,
-			shell: isWindows,
-			stdio: ['pipe', 'pipe', 'pipe'],
-		});
+		let child: ChildProcess;
+		try {
+			const env = await this._providerEnvironment();
+			const executable = await findProviderCommand(providerId, env);
+			if (activeRequest.cancelled) {
+				return chatRequest.requestId;
+			}
+			if (!executable) {
+				throw new Error(`Install and sign in to the ${definition.name} CLI from AI provider settings.`);
+			}
+			child = spawnProviderCommand(executable, definition.chatArgs, env, chatRequest.cwd, ['pipe', 'pipe', 'pipe']);
+		} catch (error) {
+			if (this._activeRequests.get(chatRequest.requestId) === activeRequest) {
+				this._activeRequests.delete(chatRequest.requestId);
+			}
+			throw error;
+		}
 		activeRequest.process = child;
 		// Keep the prompt off the command line. Besides avoiding command-length limits, this
 		// prevents shell metacharacters in code or user requests from being interpreted on
 		// Windows where installed CLI shims are launched through cmd.exe.
+		child.stdin?.on('error', () => { /* Provider may exit before it can read the prompt. */ });
 		child.stdin?.end(prompt);
 		let stdoutBuffer = '';
 		let stderr = '';
 		let emitted = false;
-		let lastCumulativeText = '';
+		let fallbackText = '';
+		let providerError = '';
 		let finished = false;
-		const emitText = (text: string | undefined, cumulative = false) => {
-			if (!text) {
-				return;
-			}
-			const token = cumulative && text.startsWith(lastCumulativeText) ? text.slice(lastCumulativeText.length) : text;
-			if (cumulative) {
-				lastCumulativeText = text;
-			}
-			if (token) {
+		const emitText = (text: string | undefined) => {
+			if (text && !activeRequest.cancelled) {
 				emitted = true;
-				this._onDidStreamToken.fire({ requestId: chatRequest.requestId, token });
+				this._onDidStreamToken.fire({ requestId: chatRequest.requestId, token: text });
 			}
 		};
 		const consumeLine = (line: string) => {
@@ -654,21 +795,20 @@ export class LocalLLMMainService extends Disposable implements ILocalLLMService 
 					if (value.type === 'item.completed' && item?.type === 'agent_message') {
 						emitText(typeof item.text === 'string' ? item.text : undefined);
 					}
-				} else if (providerId === 'cursor') {
-					const message = value.message as Record<string, unknown> | undefined;
-					const content = Array.isArray(message?.content) ? message.content as Record<string, unknown>[] : [];
-					const text = content.filter(part => part.type === 'text').map(part => typeof part.text === 'string' ? part.text : '').join('');
-					emitText(text || (!emitted && typeof value.result === 'string' ? value.result : undefined), Boolean(text));
 				} else {
 					const event = value.event as Record<string, unknown> | undefined;
 					const delta = event?.delta as Record<string, unknown> | undefined;
-					const result = typeof value.result === 'string' ? value.result : undefined;
-					emitText(typeof delta?.text === 'string' ? delta.text : (!emitted ? result : undefined));
+					emitText(typeof delta?.text === 'string' ? delta.text : undefined);
+				}
+				if (value.type === 'result' && typeof value.result === 'string') {
+					if (value.is_error === true || value.subtype === 'error') {
+						providerError = value.result;
+					} else {
+						fallbackText = value.result;
+					}
 				}
 			} catch {
-				if (!emitted && !trimmed.startsWith('{')) {
-					emitText(`${trimmed}\n`);
-				}
+				// The provider's JSON stream is the only source of model output.
 			}
 		};
 		child.stdout?.setEncoding('utf8');
@@ -681,40 +821,38 @@ export class LocalLLMMainService extends Disposable implements ILocalLLMService 
 			}
 		});
 		child.stderr?.setEncoding('utf8');
-		child.stderr?.on('data', chunk => stderr += String(chunk));
+		child.stderr?.on('data', chunk => { stderr = (stderr + String(chunk)).slice(-8192); });
 		const finish = (error?: string) => {
 			if (finished) {
 				return;
 			}
 			finished = true;
-			if (stdoutBuffer) {
-				consumeLine(stdoutBuffer);
+			if (this._activeRequests.get(chatRequest.requestId) === activeRequest) {
+				this._activeRequests.delete(chatRequest.requestId);
 			}
-			this._activeRequests.delete(chatRequest.requestId);
 			if (!activeRequest.cancelled) {
 				this._onDidStreamEnd.fire({ requestId: chatRequest.requestId, cancelled: false, error });
 			}
 		};
 		child.once('error', error => finish(toErrorMessage(error)));
-		child.once('close', code => finish(code === 0 ? undefined : (stderr.trim() || `${definition.name} CLI exited with code ${code}.`)));
-		return chatRequest.requestId;
-	}
-
-	private _commandAvailable(command: string): Promise<boolean> {
-		return new Promise(resolve => {
-			const child = spawn(command, ['--version'], { shell: isWindows, stdio: 'ignore' });
-			let settled = false;
-			const finish = (available: boolean) => {
-				if (!settled) {
-					settled = true;
-					clearTimeout(timer);
-					resolve(available);
-				}
-			};
-			const timer = setTimeout(() => { child.kill(); finish(false); }, 3000);
-			child.once('error', () => finish(false));
-			child.once('close', code => finish(code === 0));
+		child.once('close', code => {
+			if (finished) {
+				return;
+			}
+			consumeLine(stdoutBuffer);
+			if (!emitted && code === 0 && !providerError) {
+				emitText(fallbackText);
+			}
+			if ((code !== 0 || providerError) && /not (?:logged|signed) in|not authenticated|unauthenticated|authentication (?:error|failed)|\b401\b/i.test(`${stderr}\n${providerError}`)) {
+				finish(`${definition.name} sign-in is required. Open AI provider settings to reconnect.`);
+				void this.getProviderCatalog().then(catalog => this._onDidChangeProviders.fire(catalog), () => { });
+			} else if (code !== 0 || providerError) {
+				finish(`${definition.name} CLI could not complete the request (exit code ${code}). Check the provider's CLI and account settings.`);
+			} else {
+				finish(emitted ? undefined : `${definition.name} CLI did not return a response.`);
+			}
 		});
+		return chatRequest.requestId;
 	}
 
 	private async _streamRequest(requestId: string, path: string, body: object, getToken: (value: object) => string | undefined): Promise<void> {
@@ -1027,6 +1165,7 @@ export class LocalLLMMainService extends Disposable implements ILocalLLMService 
 			activeRequest.cancelled = cancelled;
 			activeRequest.request?.destroy();
 			activeRequest.process?.kill('SIGTERM');
+			activeRequest.controller?.abort();
 			this._onDidStreamEnd.fire({ requestId, cancelled, error });
 		}
 		this._activeRequests.clear();
@@ -1046,7 +1185,15 @@ export class LocalLLMMainService extends Disposable implements ILocalLLMService 
 		this._serverProcess = undefined;
 	}
 
+	private _abortProviderSignIns(): void {
+		for (const controller of this._providerSignIns.values()) {
+			controller.abort();
+		}
+		this._providerSignIns.clear();
+	}
+
 	override dispose(): void {
+		this._abortProviderSignIns();
 		this._forceKill();
 		super.dispose();
 	}

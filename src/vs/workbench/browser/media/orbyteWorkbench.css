@@ -325,11 +325,9 @@
 	border-radius: 6px;
 }
 
-.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .monaco-list-row .resource,
-.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .monaco-list-row .resource > .name,
-.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .monaco-list-row .resource > .name > .monaco-icon-label-container {
-	height: 28px;
-	line-height: 28px;
+.monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .monaco-list-row .resource {
+	box-sizing: border-box;
+	border-bottom: 1px solid color-mix(in srgb, var(--orbyte-outline) 48%, transparent);
 }
 
 .monaco-workbench:not(.hc-black):not(.hc-light) .scm-view .monaco-list-row .actions .action-label {

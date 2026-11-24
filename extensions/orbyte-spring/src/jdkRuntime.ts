@@ -8,6 +8,7 @@ import { existsSync, promises as fs } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { isOffline } from './offlineRuntime';
 
 const DEFAULT_PROJECT_JDK_VERSION = 21;
 const JDK_HOME_SETTING = 'jdkHome';
@@ -31,7 +32,7 @@ export function registerJdkRuntime(context: vscode.ExtensionContext): void {
 	const manager = new JdkRuntimeManager();
 	context.subscriptions.push(
 		manager,
-		vscode.commands.registerCommand('orbyte.java.configureJdk', () => vscode.commands.executeCommand('orbyte.environment.configure', 'java')),
+		vscode.commands.registerCommand('orbyte.java.configureJdk', (resource?: vscode.Uri) => vscode.commands.executeCommand('orbyte.environment.configure', 'java', resource)),
 		vscode.commands.registerCommand('orbyte.java.selectJdkInternal', (role: JdkRole, resource?: vscode.Uri) => manager.selectLocalJdk(role, resource)),
 		vscode.commands.registerCommand('orbyte.java.downloadJdkInternal', (role: JdkRole, version: number, resource?: vscode.Uri) => manager.downloadJdk(role, version, resource)),
 		vscode.commands.registerCommand('orbyte.java.useOrDownloadJdkInternal', (role: JdkRole, version: number, resource?: vscode.Uri) => manager.useOrDownloadJdk(role, version, resource)),
@@ -41,14 +42,83 @@ export function registerJdkRuntime(context: vscode.ExtensionContext): void {
 
 /** The JDK selected for compiling, running, testing, and debugging the current project. */
 export function configuredJdkEnvironment(resource?: vscode.Uri): Record<string, string> | undefined {
+	if (!vscode.workspace.isTrusted) {
+		return undefined;
+	}
 	const home = vscode.workspace.getConfiguration('orbyte.java', resource).get<string>(JDK_HOME_SETTING)?.trim();
 	if (!home || !isJdkHome(home)) {
 		return undefined;
 	}
+	return jdkEnvironment(home);
+}
+
+function jdkEnvironment(home: string): Record<string, string> {
 	return {
 		JAVA_HOME: home,
 		PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env.PATH ?? ''}`,
 	};
+}
+
+export async function resolveProjectJdkEnvironment(resource?: vscode.Uri, projectRoot?: string): Promise<Record<string, string> | undefined> {
+	const configured = configuredJdkEnvironment(resource);
+	if (configured) {
+		return configured;
+	}
+	const resourceIsDirectory = resource?.scheme === 'file' && (await fs.stat(resource.fsPath).catch(() => undefined))?.isDirectory();
+	const root = projectRoot ?? (resourceIsDirectory ? resource?.fsPath : resource && vscode.workspace.getWorkspaceFolder(resource)?.uri.fsPath);
+	const requested = root ? await declaredProjectJavaVersion(root) : undefined;
+	const configuredRuntimes = vscode.workspace.isTrusted
+		? vscode.workspace.getConfiguration('java.configuration', resource ?? null).get<IJavaRuntimeSetting[]>('runtimes', [])
+		: [];
+	for (const runtime of Array.isArray(configuredRuntimes) ? configuredRuntimes : []) {
+		if (typeof runtime?.path !== 'string' || !isJdkHome(runtime.path)) {
+			continue;
+		}
+		const version = await readJavaMajor(runtime.path);
+		if (version && (requested ? version === requested : runtime.default)) {
+			return jdkEnvironment(runtime.path);
+		}
+	}
+	const installed = await findInstalledJdks();
+	const preferredHome = process.env.JAVA_HOME;
+	const local = requested
+		? installed.find(jdk => jdk.version === requested) ?? installed.filter(jdk => jdk.version > requested).at(-1)
+		: installed.find(jdk => jdk.path === preferredHome) ?? installed.find(jdk => jdk.version === DEFAULT_PROJECT_JDK_VERSION) ?? installed[0];
+	if (local) {
+		return jdkEnvironment(local.path);
+	}
+	const bundled = await bundledJdk();
+	return bundled && (!requested || bundled.version === requested) ? jdkEnvironment(bundled.path) : undefined;
+}
+
+async function bundledJdk(): Promise<IInstalledJdk | undefined> {
+	const appRoot = vscode.env.appRoot;
+	const extensionsRoot = process.env.VSCODE_DEV
+		? path.join(appRoot, '.build', 'builtInExtensions')
+		: path.join(appRoot, 'extensions');
+	const jreRoot = path.join(extensionsRoot, 'redhat.java', 'jre');
+	const entries = await fs.readdir(jreRoot).catch(() => []);
+	for (const entry of entries) {
+		const home = path.join(jreRoot, entry);
+		if (isJdkHome(home)) {
+			const version = await readJavaMajor(home);
+			if (version && version >= 25) {
+				return { version, path: home };
+			}
+		}
+	}
+	return undefined;
+}
+
+async function declaredProjectJavaVersion(root: string): Promise<number | undefined> {
+	const read = (file: string) => fs.readFile(path.join(root, file), 'utf8').catch(() => '');
+	const [versionFile, pom, gradle, kotlinGradle] = await Promise.all(
+		['.java-version', 'pom.xml', 'build.gradle', 'build.gradle.kts'].map(read),
+	);
+	const value = /^(?:1\.)?(\d+)\b/.exec(versionFile.trim())?.[1]
+		?? /<(?:java\.version|maven\.compiler\.(?:release|target|source))>\s*(?:1\.)?(\d+)\s*</.exec(pom)?.[1]
+		?? /JavaLanguageVersion\.of\s*\(\s*(\d+)|JavaVersion\.VERSION_(?:1_)?(\d+)/.exec(gradle + '\n' + kotlinGradle)?.slice(1).find(Boolean);
+	return value ? Number(value) : undefined;
 }
 
 class JdkRuntimeManager implements vscode.Disposable {
@@ -88,7 +158,8 @@ class JdkRuntimeManager implements vscode.Disposable {
 		}
 		this.promptStarted = true;
 		await new Promise(resolve => setTimeout(resolve, 900));
-		if (!(await hasJavaProjectContext()) || await hasManagedJdkConfiguration()) {
+		if (!vscode.workspace.getConfiguration('orbyte.environment').get('autoDetect', true)
+			|| !(await hasJavaProjectContext()) || await resolveProjectJdkEnvironment(configurationResource())) {
 			return;
 		}
 
@@ -151,6 +222,10 @@ class JdkRuntimeManager implements vscode.Disposable {
 			await this.useJdk(role, installed.path, resource);
 			return;
 		}
+		if (isOffline()) {
+			void vscode.window.showWarningMessage(`JDK ${version} is not installed. Select a local JDK or turn off Offline Project Mode to download it.`);
+			return;
+		}
 		if (process.platform !== 'win32') {
 			await vscode.env.openExternal(vscode.Uri.parse(`https://adoptium.net/temurin/releases/?version=${version}`));
 			void vscode.window.showInformationMessage('After installing the JDK, open “Orbyte: Java SDK Setup” and select its installation directory.');
@@ -203,7 +278,11 @@ class JdkRuntimeManager implements vscode.Disposable {
 	}
 
 	private async useJdk(role: JdkRole, home: string, resource = configurationResource()): Promise<void> {
-		const version = await readJavaMajor(home);
+		if (!vscode.workspace.isTrusted) {
+			void vscode.window.showWarningMessage('Trust this workspace before changing the Java runtime.');
+			return;
+		}
+		const version = await readJavaMajor(home, true);
 		if (!version) {
 			void vscode.window.showErrorMessage(`The selected directory does not contain a working JDK: ${home}`);
 			return;
@@ -215,8 +294,8 @@ class JdkRuntimeManager implements vscode.Disposable {
 				`Project JDK ${version} is ready for build, run, test, and debug.`,
 				'Restart Java',
 			);
-			if (action === 'Restart Java' && vscode.extensions.getExtension('redhat.java')) {
-				await vscode.commands.executeCommand('java.server.restart');
+			if (action === 'Restart Java') {
+				await vscode.commands.executeCommand('workbench.action.reloadWindow');
 			}
 		} else {
 			await this.configureProjectJdk(home, version, resource);
@@ -255,25 +334,21 @@ class JdkRuntimeManager implements vscode.Disposable {
 			this.statusBar.hide();
 			return;
 		}
-		const projectHome = configuredJdkEnvironment(configurationResource())?.JAVA_HOME;
+		const resource = configurationResource();
+		const configured = configuredJdkEnvironment(resource);
+		const projectHome = (configured ?? await resolveProjectJdkEnvironment(resource))?.JAVA_HOME;
 		const projectVersion = projectHome ? await readJavaMajor(projectHome) : undefined;
-		const ready = await hasManagedJdkConfiguration();
-		if (!ready || !projectVersion) {
+		if (!projectVersion) {
 			this.statusBar.text = '$(warning) Java SDK Setup';
 			this.statusBar.tooltip = 'Select the JDK used to build, run, test, and debug this project.';
 			this.statusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
 		} else {
 			this.statusBar.text = `$(coffee) Java ${projectVersion}`;
-			this.statusBar.tooltip = `Project JDK ${projectVersion} is ready for build, run, test, and debug.`;
+			this.statusBar.tooltip = `${configured ? 'Configured' : 'Detected local'} JDK ${projectVersion}: ${projectHome}. Click to change the project JDK.`;
 			this.statusBar.backgroundColor = undefined;
 		}
 		this.statusBar.show();
 	}
-}
-
-async function hasManagedJdkConfiguration(resource = configurationResource()): Promise<boolean> {
-	const projectHome = configuredJdkEnvironment(resource)?.JAVA_HOME;
-	return Boolean(projectHome);
 }
 
 async function recordPreferredJdkVersion(version: number, resource = configurationResource()): Promise<void> {
@@ -312,8 +387,15 @@ function isJdkHome(home: string): boolean {
 		&& existsSync(path.join(home, 'bin', `javac${suffix}`));
 }
 
-async function readJavaMajor(home: string): Promise<number | undefined> {
+async function readJavaMajor(home: string, verifyExecutable = false): Promise<number | undefined> {
 	try {
+		if (!verifyExecutable) {
+			const release = await fs.readFile(path.join(home, 'release'), 'utf8').catch(() => '');
+			const version = /^JAVA_VERSION="(?:1\.)?(\d+)/m.exec(release)?.[1];
+			if (version) {
+				return Number(version);
+			}
+		}
 		const output = await run(path.join(home, 'bin', process.platform === 'win32' ? 'java.exe' : 'java'), ['-version']);
 		return parseJavaMajor(output);
 	} catch {
@@ -385,7 +467,8 @@ export async function findInstalledJdks(force = false): Promise<readonly IInstal
 				path.join(os.homedir(), '.jabba', 'jdk'),
 				path.join(os.homedir(), '.local', 'share', 'mise', 'installs', 'java'),
 			];
-	for (const root of roots.filter((value): value is string => Boolean(value))) {
+	const gradleJdks = path.join(process.env.GRADLE_USER_HOME || path.join(os.homedir(), '.gradle'), 'jdks');
+	for (const root of [...roots, gradleJdks].filter((value): value is string => Boolean(value))) {
 		await collectJdkCandidates(root, candidates, 2);
 	}
 
@@ -393,6 +476,10 @@ export async function findInstalledJdks(force = false): Promise<readonly IInstal
 		const output = await run(process.platform === 'win32' ? 'where.exe' : 'which', [process.platform === 'win32' ? 'java.exe' : 'java']);
 		for (const executable of output.split(/\r?\n/).map(line => line.trim()).filter(Boolean)) {
 			candidates.add(path.dirname(path.dirname(executable)));
+			const resolved = await fs.realpath(executable).catch(() => undefined);
+			if (resolved) {
+				candidates.add(path.dirname(path.dirname(resolved)));
+			}
 		}
 	} catch {
 		// PATH does not expose Java; standard locations may still contain installations.
@@ -440,7 +527,7 @@ async function collectJdkCandidates(root: string, candidates: Set<string>, depth
 
 function run(command: string, args: string[]): Promise<string> {
 	return new Promise((resolve, reject) => {
-		execFile(command, args, { windowsHide: true }, (error, stdout, stderr) => {
+		execFile(command, args, { windowsHide: true, timeout: command === 'winget' ? 0 : 8_000 }, (error, stdout, stderr) => {
 			if (error) {
 				reject(new Error((stderr || stdout || error.message).trim()));
 				return;

@@ -1,0 +1,45 @@
+/*---------------------------------------------------------------------------------------------
+ * Copyright (c) Orbyte. All rights reserved.
+ * Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+body {
+	margin: 0;
+	padding: 24px;
+	color: var(--vscode-foreground);
+	background: var(--vscode-editor-background);
+	font: var(--vscode-font-size, 13px)/1.5 var(--vscode-font-family, sans-serif);
+}
+
+header { display: flex; align-items: center; gap: 12px; margin-block-end: 22px; }
+header img { width: 36px; height: 36px; }
+h1 { margin: 0; font-size: 24px; }
+main { display: grid; grid-template-columns: minmax(172px, 220px) minmax(0, 1fr); gap: 24px; }
+aside { border-inline-end: 1px solid var(--vscode-panel-border); padding-inline-end: 16px; }
+nav, form, #details, #applications { display: grid; gap: 10px; }
+nav { margin-block-start: 12px; }
+nav button { text-align: start; overflow-wrap: anywhere; }
+nav button[aria-pressed="true"] { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
+label { display: grid; gap: 4px; }
+.check { display: flex; align-items: center; gap: 8px; }
+.muted { color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
+p { margin: 0; }
+fieldset { min-width: 0; display: grid; gap: 10px; margin: 0; padding: 12px; border: 1px solid var(--vscode-panel-border); border-radius: 6px; }
+legend { padding-inline: 4px; font-weight: 600; }
+.server { margin-block-start: 3px; }
+.browse { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; }
+input:not([type="checkbox"]), select { min-width: 0; padding: 6px 8px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); }
+button { padding: 6px 10px; color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); border: 1px solid var(--vscode-button-border, transparent); border-radius: 4px; cursor: pointer; }
+button:hover { background: var(--vscode-button-secondaryHoverBackground); }
+button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+button.primary:hover { background: var(--vscode-button-hoverBackground); }
+button:disabled { opacity: .5; cursor: default; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
+.secondary { justify-self: start; }
+.editor-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+#status:empty { display: none; }
+
+@media (max-width: 590px) {
+	main { grid-template-columns: 1fr; }
+	aside { border-inline-end: none; padding-inline-end: 0; }
+}

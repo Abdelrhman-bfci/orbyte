@@ -129,6 +129,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",
+    "@cursor/sdk": "1.4.1",
     "@devcontainers/cli": "0.88.0",
     "@github/copilot-sdk": "1.0.33-preview.0",
     "@hpke/core": "^1.9.0",

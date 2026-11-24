@@ -117,35 +117,38 @@
 	flex: 1;
 }
 
-.monaco-workbench .part.sidebar > .title > .composite-bar-container > .orbyte-home-activity-action,
-.monaco-workbench .part.sidebar > .header-or-footer > .composite-bar-container > .orbyte-home-activity-action {
+.monaco-workbench .part.sidebar > :is(.title, .header-or-footer) > .composite-bar-container > .orbyte-home-activity-action {
 	flex: 0 0 auto;
 }
 
-.monaco-workbench .part.sidebar > .title > .composite-bar-container > .orbyte-home-activity-action > .monaco-action-bar .action-item,
-.monaco-workbench .part.sidebar > .header-or-footer > .composite-bar-container > .orbyte-home-activity-action > .monaco-action-bar .action-item {
+.monaco-workbench .part.sidebar > :is(.title, .header-or-footer) > .composite-bar-container > .orbyte-home-activity-action > .monaco-action-bar .action-item {
 	display: flex;
 	height: 35px;
-	padding: 0 3px;
+	padding: 0 4px;
 }
 
-.monaco-workbench .part.sidebar > .title > .composite-bar-container > .orbyte-home-activity-action > .monaco-action-bar .action-label,
-.monaco-workbench .part.sidebar > .header-or-footer > .composite-bar-container > .orbyte-home-activity-action > .monaco-action-bar .action-label {
+.monaco-workbench .part.sidebar > :is(.title, .header-or-footer) > .composite-bar-container > .orbyte-home-activity-action > .monaco-action-bar .action-item .action-label.codicon-home {
 	align-items: center;
 	justify-content: center;
-	width: 22px;
-	height: 22px;
+	width: 32px;
+	height: 32px;
+	font-size: 22px;
 	padding: 0;
-	color: var(--vscode-activityBarTop-inactiveForeground);
+	color: var(--vscode-activityBarTop-foreground);
 	border-radius: var(--vscode-cornerRadius-medium);
 }
 
-.monaco-workbench .part.sidebar > .title > .composite-bar-container > .orbyte-home-activity-action > .monaco-action-bar .action-item:hover .action-label,
-.monaco-workbench .part.sidebar > .title > .composite-bar-container > .orbyte-home-activity-action > .monaco-action-bar .action-item:focus .action-label,
-.monaco-workbench .part.sidebar > .header-or-footer > .composite-bar-container > .orbyte-home-activity-action > .monaco-action-bar .action-item:hover .action-label,
-.monaco-workbench .part.sidebar > .header-or-footer > .composite-bar-container > .orbyte-home-activity-action > .monaco-action-bar .action-item:focus .action-label {
-	color: var(--vscode-activityBarTop-foreground);
+.monaco-workbench .part.sidebar > :is(.title, .header-or-footer) > .composite-bar-container > .orbyte-home-activity-action > .monaco-action-bar .action-item .action-label.codicon-home::before {
+	position: static;
+}
+
+.monaco-workbench .part.sidebar > :is(.title, .header-or-footer) > .composite-bar-container > .orbyte-home-activity-action > .monaco-action-bar .action-item:hover .action-label.codicon-home {
 	background-color: var(--vscode-toolbar-hoverBackground);
+}
+
+.monaco-workbench .part.sidebar > :is(.title, .header-or-footer) > .composite-bar-container > .orbyte-home-activity-action > .monaco-action-bar .action-item .action-label.codicon-home:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -1px;
 }
 
 .monaco-workbench .sidebar.part.pane-composite-part > .composite.title.has-composite-bar > .title-actions {

@@ -702,9 +702,9 @@ class ListDelegate implements IListVirtualDelegate<TreeElement> {
 		} else if (isSCMRepository(element)) {
 			return 40;
 		} else if (isSCMResourceGroup(element)) {
-			return 32;
+			return 40;
 		} else {
-			return 28;
+			return 34;
 		}
 	}
 

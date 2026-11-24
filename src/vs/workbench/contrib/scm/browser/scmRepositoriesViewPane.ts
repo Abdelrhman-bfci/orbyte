@@ -50,10 +50,12 @@ import { fromNow } from '../../../../base/common/date.js';
 
 type TreeElement = ISCMRepository | SCMArtifactGroupTreeElement | SCMArtifactTreeElement | IResourceNode<SCMArtifactTreeElement, SCMArtifactGroupTreeElement>;
 
-class ListDelegate implements IListVirtualDelegate<ISCMRepository> {
+const REPOSITORY_LIST_ROW_HEIGHT = 40;
 
-	getHeight(): number {
-		return 22;
+class ListDelegate implements IListVirtualDelegate<TreeElement> {
+
+	getHeight(element: TreeElement): number {
+		return isSCMRepository(element) ? REPOSITORY_LIST_ROW_HEIGHT : 32;
 	}
 
 	getTemplateId(element: TreeElement): string {
@@ -805,9 +807,9 @@ export class SCMRepositoriesViewPane extends ViewPane {
 		if (this.scmViewService.explorerEnabledConfig.get() === false) {
 			visibleCount = visibleCount ?? this.visibleCountObs.get();
 			const empty = this.scmViewService.repositories.length === 0;
-			const size = Math.min(contentHeight / 22, visibleCount) * 22;
+			const size = Math.min(contentHeight, visibleCount * REPOSITORY_LIST_ROW_HEIGHT);
 
-			this.minimumBodySize = visibleCount === 0 ? 22 : size;
+			this.minimumBodySize = visibleCount === 0 ? REPOSITORY_LIST_ROW_HEIGHT : size;
 			this.maximumBodySize = visibleCount === 0 ? Number.POSITIVE_INFINITY : empty ? Number.POSITIVE_INFINITY : size;
 		} else {
 			this.minimumBodySize = 120;

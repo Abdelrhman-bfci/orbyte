@@ -75,7 +75,18 @@ function isUpToDate(extension: IExtensionDefinition): boolean {
 		}
 		if (extension.platformSpecific) {
 			const asset = resolvePlatformSpecificAsset(extension);
-			return packageJson.__metadata?.orbytePlatformAsset === asset?.assetName;
+			if (packageJson.__metadata?.orbytePlatformAsset !== asset?.assetName) {
+				return false;
+			}
+			if (extension.name === 'redhat.java' && asset?.assetName.startsWith('java-')) {
+				const runtimeDirectory = path.join(getExtensionPath(extension), 'jre');
+				const executable = asset.assetName.startsWith('java-win32-') ? 'java.exe' : 'java';
+				return fs.readdirSync(runtimeDirectory).some(entry => {
+					const stat = fs.statSync(path.join(runtimeDirectory, entry, 'bin', executable), { throwIfNoEntry: false });
+					return !!stat?.isFile() && stat.size > 0 && (process.platform === 'win32' || executable === 'java.exe' || (stat.mode & 0o111) !== 0);
+				});
+			}
+			return true;
 		}
 		return true;
 	} catch (err) {

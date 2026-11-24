@@ -137,6 +137,7 @@ jobs:
             '/SUPPRESSMSGBOXES',
             '/NORESTART',
             '/SP-',
+            '/MERGETASKS=desktopicon',
             "/DIR=$installDir"
           ) -PassThru
           if (-not $setup.WaitForExit(600000)) {
@@ -153,6 +154,33 @@ jobs:
             throw "The installer completed but Orbyte.exe is missing from $installDir."
           }
           Assert-X64Pe $installedExe
+
+          $installedIcon = Join-Path $installDir 'orbyte.ico'
+          $expectedIconHash = (Get-FileHash 'resources\win32\code.ico' -Algorithm SHA256).Hash
+          if (-not (Test-Path $installedIcon) -or (Get-FileHash $installedIcon -Algorithm SHA256).Hash -ne $expectedIconHash) {
+            throw 'The installed Orbyte shortcut icon is missing or does not match the bundled asset.'
+          }
+          $shortcutPath = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'Orbyte.lnk'
+          if (-not (Test-Path $shortcutPath)) {
+            throw 'The installer did not create the requested Orbyte desktop shortcut.'
+          }
+          $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcutPath)
+          if ($shortcut.TargetPath -ne $installedExe -or ($shortcut.IconLocation -split ',\s*-?\d+$')[0] -ne $installedIcon) {
+            throw "The Orbyte shortcut points to the wrong executable or icon: $($shortcut.TargetPath), $($shortcut.IconLocation)"
+          }
+
+          $toolingJava = Get-ChildItem $installDir -Recurse -File -Filter 'java.exe' |
+            Where-Object { $_.FullName -match '\\extensions\\redhat\.java\\jre\\[^\\]+\\bin\\java\.exe$' } |
+            Select-Object -First 1
+          if (-not $toolingJava) {
+            throw 'The installed Java extension is missing its offline tooling JVM.'
+          }
+          Assert-X64Pe $toolingJava.FullName
+          $javaVersion = & $toolingJava.FullName -version 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0 -or $javaVersion -notmatch 'version "(\d+)' -or [int]$Matches[1] -lt 25) {
+            throw "The installed Java tooling JVM could not start or is older than Java 25: $javaVersion"
+          }
+          Write-Host 'Validated the installed local icon and Java tooling JVM.'
 
           $stdout = Join-Path $env:RUNNER_TEMP 'orbyte-version.txt'
           $stderr = Join-Path $env:RUNNER_TEMP 'orbyte-version-error.txt'

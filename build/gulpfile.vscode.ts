@@ -273,6 +273,7 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 				'**/@vscode/ripgrep-universal/bin/**',
 				// The SDK runtime wrapper and native module must remain adjacent on disk.
 				'**/@github/copilot-sdk-{darwin,linux,linuxmusl,win32}-*/**',
+				'**/@cursor/sdk-{darwin,linux,win32}-*/**',
 				// The Dev Container CLI is spawned as an external Node process,
 				// so its bundled entrypoint must be available outside the ASAR.
 				'**/@devcontainers/cli/**',

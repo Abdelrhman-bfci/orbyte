@@ -8,7 +8,7 @@ import { existsSync, statSync } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { findInstalledJdks } from './jdkRuntime';
+import { findInstalledJdks, resolveProjectJdkEnvironment } from './jdkRuntime';
 
 type MemoryMode = 'java' | 'node' | 'none';
 type ConfigurationScope = 'workspace' | 'global';
@@ -70,7 +70,7 @@ export function registerEnvironmentSetup(context: vscode.ExtensionContext): void
 	const manager = new EnvironmentSetupManager(context);
 	context.subscriptions.push(
 		manager,
-		vscode.commands.registerCommand('orbyte.environment.configure', (languageId?: string) => manager.configure(languageId)),
+		vscode.commands.registerCommand('orbyte.environment.configure', (languageId?: string, resource?: vscode.Uri) => manager.configure(languageId, resource)),
 	);
 	void manager.start();
 }
@@ -80,6 +80,7 @@ class EnvironmentSetupManager implements vscode.Disposable {
 	private readonly disposables: vscode.Disposable[] = [];
 	private readonly prompted = new Set<string>();
 	private panel: vscode.WebviewPanel | undefined;
+	private resource: vscode.Uri | undefined;
 	private updateTimer: NodeJS.Timeout | undefined;
 
 	constructor(private readonly context: vscode.ExtensionContext) {
@@ -111,7 +112,8 @@ class EnvironmentSetupManager implements vscode.Disposable {
 		await this.update();
 	}
 
-	async configure(requestedLanguageId?: string): Promise<void> {
+	async configure(requestedLanguageId?: string, resource?: vscode.Uri): Promise<void> {
+		this.resource = resource ?? configurationResource();
 		const detected = await detectEnvironment();
 		const requested = environmentByIdOrLanguage(requestedLanguageId);
 		const selected = requested ?? detected ?? environments[0];
@@ -155,14 +157,14 @@ class EnvironmentSetupManager implements vscode.Disposable {
 		try {
 			if (payload.type === 'selectLocal') {
 				if (environment.id === 'java') {
-					await vscode.commands.executeCommand('orbyte.java.selectJdkInternal', 'unified');
+					await vscode.commands.executeCommand('orbyte.java.selectJdkInternal', 'unified', this.resource);
 				} else {
 					await this.selectRuntime(environment, payload.scope === 'workspace' ? 'workspace' : 'global');
 				}
 			} else if (payload.type === 'download') {
 				const version = typeof payload.version === 'string' ? payload.version : environment.recommendedVersion;
 				if (environment.id === 'java') {
-					await vscode.commands.executeCommand('orbyte.java.downloadJdkInternal', 'unified', Number(version));
+					await vscode.commands.executeCommand('orbyte.java.downloadJdkInternal', 'unified', Number(version), this.resource);
 				} else {
 					await vscode.env.openExternal(vscode.Uri.parse(downloadUrl(environment, version)));
 				}
@@ -171,7 +173,7 @@ class EnvironmentSetupManager implements vscode.Disposable {
 				if (!Number.isFinite(version)) {
 					throw new Error('Select a valid JDK version.');
 				}
-				await vscode.commands.executeCommand('orbyte.java.useOrDownloadJdkInternal', 'unified', version);
+				await vscode.commands.executeCommand('orbyte.java.useOrDownloadJdkInternal', 'unified', version, this.resource);
 			} else if (payload.type === 'apply') {
 				await this.applyForm(environment, payload);
 			} else if (payload.type === 'openSelector' && environment.selectorCommand) {
@@ -279,7 +281,7 @@ class EnvironmentSetupManager implements vscode.Disposable {
 		if (!this.panel) {
 			return;
 		}
-		const state = await buildViewState(selectedId);
+		const state = await buildViewState(selectedId, this.resource);
 		await this.panel.webview.postMessage({ type: 'state', state });
 	}
 
@@ -306,7 +308,7 @@ class EnvironmentSetupManager implements vscode.Disposable {
 	}
 }
 
-async function buildViewState(selectedId?: string): Promise<IEnvironmentViewState> {
+async function buildViewState(selectedId?: string, resource = configurationResource()): Promise<IEnvironmentViewState> {
 	const detected = await detectEnvironment();
 	const configuration = vscode.workspace.getConfiguration('orbyte.environment');
 	const runtimePaths = configuration.get<Record<string, string>>('runtimePaths', {});
@@ -321,17 +323,18 @@ async function buildViewState(selectedId?: string): Promise<IEnvironmentViewStat
 	}
 	const totalMemoryGb = Math.round(os.totalmem() / 1024 / 1024 / 1024 * 10) / 10;
 	const javaInstalledJdks = await findInstalledJdks();
-	const javaProjectPath = vscode.workspace.getConfiguration('orbyte.java', configurationResource()).get<string>('jdkHome', '');
+	const javaProjectPath = vscode.workspace.getConfiguration('orbyte.java', resource).get<string>('jdkHome', '');
 	const preferredJavaVersion = Number(configuration.get<Record<string, string>>('preferredVersions', {}).java);
-	const preferredInstalledJdk = javaInstalledJdks.find(jdk => jdk.version === preferredJavaVersion) ?? javaInstalledJdks[0];
+	const preferredInstalledJdk = javaInstalledJdks.find(jdk => jdk.version === preferredJavaVersion);
 	const configuredProjectHome = isJavaHomeDirectory(javaProjectPath) ? javaProjectPath : '';
-	const javaJdkPath = configuredProjectHome || preferredInstalledJdk?.path || detectedPaths.java || '';
+	const automaticJdk = await resolveProjectJdkEnvironment(resource);
+	const javaJdkPath = configuredProjectHome || automaticJdk?.JAVA_HOME || preferredInstalledJdk?.path || detectedPaths.java || '';
 	const javaExecutable = javaJdkPath
 		? resolveJavaExecutable(javaJdkPath)
 		: detectedPaths.java;
 	const javaJdkVersion = javaExecutable ? await executableVersion(javaExecutable) : undefined;
 	const javaJdkMajor = javaJdkVersion ? parseJavaMajor(javaJdkVersion) : undefined;
-	const javaJdkReady = Boolean(configuredProjectHome && javaJdkMajor);
+	const javaJdkReady = Boolean((configuredProjectHome || automaticJdk) && javaJdkMajor);
 	return {
 		selectedId: environmentByIdOrLanguage(selectedId)?.id ?? detected?.id ?? 'java',
 		detectedId: detected?.id,

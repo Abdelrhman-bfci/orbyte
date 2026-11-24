@@ -6,10 +6,13 @@
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { IServerLaunchOptions, serverLaunchDefaults, validateServerLaunch } from './enterpriseRuntime';
+import { isOffline, offlineEnvironment, setOffline } from './offlineRuntime';
+import { showRunConfigurationEditor } from './runConfigurationEditor';
 
 type RunMode = 'run' | 'debug';
 
-interface IApplicationDescriptor {
+export interface IApplicationDescriptor {
 	readonly id: string;
 	readonly name: string;
 	readonly language: string;
@@ -18,6 +21,7 @@ interface IApplicationDescriptor {
 	readonly command?: { readonly executable: string; readonly args: readonly string[] };
 	readonly debug?: IDebugConfiguration;
 	readonly enterprise?: boolean;
+	readonly serverDeployable?: boolean;
 }
 
 interface IDebugConfiguration {
@@ -26,17 +30,18 @@ interface IDebugConfiguration {
 	readonly [key: string]: unknown;
 }
 
-interface IRunConfiguration {
+export interface IRunConfiguration {
 	readonly name: string;
 	readonly applications: readonly string[];
 	readonly programArgs?: Readonly<Record<string, string>>;
 	readonly commandOverrides?: Readonly<Record<string, string>>;
+	readonly servers?: Readonly<Record<string, IServerLaunchOptions>>;
 }
 
 const SEARCH_EXCLUDE = '**/{.git,.idea,.gradle,node_modules,target,build,out,dist,vendor,bin,obj}/**';
 
 export function registerApplicationRuntime(context: vscode.ExtensionContext): void {
-	const runtime = new ApplicationRuntime();
+	const runtime = new ApplicationRuntime(context.extensionUri);
 	context.subscriptions.push(runtime);
 	void runtime.start();
 }
@@ -48,8 +53,9 @@ class ApplicationRuntime implements vscode.Disposable {
 	private readonly debugSessions = new Map<string, vscode.DebugSession>();
 	private applications: readonly IApplicationDescriptor[] = [];
 	private refreshTimer: ReturnType<typeof setTimeout> | undefined;
+	private configurationEditor?: vscode.WebviewPanel;
 
-	constructor() {
+	constructor(private readonly extensionUri: vscode.Uri) {
 		this.statusBar.name = 'Orbyte Run Configuration';
 		this.statusBar.command = 'orbyte.run.select';
 		this.disposables.push(
@@ -62,6 +68,15 @@ class ApplicationRuntime implements vscode.Disposable {
 			vscode.commands.registerCommand('orbyte.run.runDetected', (resource?: vscode.Uri) => this.runDetected(resource, 'run')),
 			vscode.commands.registerCommand('orbyte.run.debugDetected', (resource?: vscode.Uri) => this.runDetected(resource, 'debug')),
 			vscode.commands.registerCommand('orbyte.run.refreshApplications', () => this.refresh(true)),
+			vscode.commands.registerCommand('orbyte.run.toggleOffline', async () => {
+				if (!vscode.workspace.isTrusted) {
+					void vscode.window.showWarningMessage('Trust this workspace before changing import settings.');
+					return;
+				}
+				const offline = !isOffline();
+				await setOffline(offline);
+				void vscode.window.showInformationMessage(offline ? 'Offline mode enabled. Imports and launches use local tools and cached dependencies.' : 'Offline mode disabled.');
+			}),
 			vscode.commands.registerCommand('orbyte.debug.pause', () => vscode.commands.executeCommand('workbench.action.debug.pause')),
 			vscode.commands.registerCommand('orbyte.debug.continue', () => vscode.commands.executeCommand('workbench.action.debug.continue')),
 			vscode.commands.registerCommand('orbyte.debug.stepOver', () => vscode.commands.executeCommand('workbench.action.debug.stepOver')),
@@ -99,6 +114,7 @@ class ApplicationRuntime implements vscode.Disposable {
 	}
 
 	dispose(): void {
+		this.configurationEditor?.dispose();
 		if (this.refreshTimer) {
 			clearTimeout(this.refreshTimer);
 		}
@@ -168,126 +184,100 @@ class ApplicationRuntime implements vscode.Disposable {
 	}
 
 	private async configure(resource?: vscode.Uri): Promise<void> {
-		if (!this.applications.length) {
-			await this.refresh(false);
-		}
-		if (!this.applications.length) {
-			const action = await vscode.window.showWarningMessage(
-				'Orbyte did not find a runnable application. Open a project with a supported framework or configure its SDK/runtime first.',
-				'Environment Setup',
-				'Refresh',
-			);
-			if (action === 'Environment Setup') {
-				await vscode.commands.executeCommand('orbyte.environment.configure');
-			} else if (action === 'Refresh') {
-				await this.refresh(true);
-			}
+		if (!vscode.workspace.workspaceFolders?.length) {
+			void vscode.window.showWarningMessage('Open a project folder to create a run configuration.');
 			return;
 		}
-		const existing = this.configurations();
-		const choices: Array<
-			{ readonly label: string; readonly description: string; readonly choiceType: 'new' }
-			| { readonly label: string; readonly description: string; readonly choiceType: 'existing'; readonly configuration: IRunConfiguration }
-		> = [
-			{ label: '$(add) New Run Configuration', description: 'One application or a compound group of microservices', choiceType: 'new' as const },
-			...existing.map(configuration => ({ label: `$(settings-gear) ${configuration.name}`, description: this.describeConfiguration(configuration), choiceType: 'existing' as const, configuration })),
-		];
-		const choice = await vscode.window.showQuickPick<(typeof choices)[number]>(choices, { title: 'Edit Run Configurations' });
-		if (!choice) {
+		if (this.configurationEditor) {
+			this.configurationEditor.reveal();
 			return;
 		}
-		if (choice.choiceType === 'existing') {
-			const action = await vscode.window.showQuickPick([
-				{ label: '$(edit) Edit', action: 'edit' as const },
-				{ label: '$(play) Run', action: 'run' as const },
-				{ label: '$(debug-alt) Debug', action: 'debug' as const },
-				{ label: '$(trash) Delete', action: 'delete' as const },
-			], { title: choice.configuration.name });
-			if (!action) {
-				return;
-			}
-			if (action.action === 'run' || action.action === 'debug') {
-				await this.saveSelected(choice.configuration.name);
-				await this.runConfiguration(choice.configuration, action.action);
-				return;
-			}
-			if (action.action === 'delete') {
-				await this.saveConfigurations(existing.filter(configuration => configuration.name !== choice.configuration.name));
-				return;
-			}
-			await this.editConfiguration(choice.configuration, resource);
+		await this.refresh(false);
+		if (this.configurationEditor) {
 			return;
 		}
-		await this.editConfiguration(undefined, resource);
+		const contextual = this.applicationForResource(resource ?? vscode.window.activeTextEditor?.document.uri);
+		const applications = [...this.applications, ...this.customApplications()];
+		const panel = this.configurationEditor = showRunConfigurationEditor(this.extensionUri, {
+			applications,
+			contextual: contextual?.id ?? applications[0]?.id,
+			configurations: this.configurations(),
+			selected: this.selectedConfiguration()?.name,
+			servers: serverLaunchDefaults(),
+			projectServers: vscode.workspace.getConfiguration('orbyte.enterprise').get<Record<string, string>>('projectServers', {}),
+			offline: isOffline(),
+			trusted: vscode.workspace.isTrusted,
+			platform: process.platform,
+		}, async (configuration, previousName, offline, action) => {
+			if (!vscode.workspace.isTrusted) {
+				throw new Error('Trust this workspace before saving or running a configuration.');
+			}
+			const existing = this.configurations();
+			if (action === 'delete') {
+				await this.saveConfigurations(existing.filter(candidate => candidate.name !== previousName));
+				return this.configurations();
+			}
+			const validated = this.validateConfiguration(configuration);
+			if (existing.some(candidate => candidate.name === validated.name && candidate.name !== previousName)) {
+				throw new Error('A run configuration already uses this name.');
+			}
+			await this.saveConfigurations([...existing.filter(candidate => candidate.name !== previousName), validated]);
+			await this.saveSelected(validated.name);
+			if (isOffline() !== offline) {
+				await setOffline(offline);
+			}
+			if (action === 'run' || action === 'debug') {
+				void this.runConfiguration(validated, action).catch(error => vscode.window.showErrorMessage(String(error)));
+			}
+			return this.configurations();
+		});
+		panel.onDidDispose(() => {
+			this.configurationEditor = undefined;
+		});
 	}
 
-	private async editConfiguration(existing: IRunConfiguration | undefined, resource?: vscode.Uri): Promise<void> {
-		const contextual = this.applicationForResource(resource);
-		const selected = await vscode.window.showQuickPick(this.applications.map(application => ({
-			label: application.name,
-			description: `${application.framework} · ${application.language}`,
-			detail: vscode.workspace.asRelativePath(application.root, false),
-			picked: existing ? existing.applications.includes(application.id) : contextual?.id === application.id,
-			application,
-		})), { title: 'Applications in this configuration', canPickMany: true, placeHolder: 'Select one app or multiple microservices' });
-		if (!selected?.length) {
-			return;
+	private validateConfiguration(input: IRunConfiguration): IRunConfiguration {
+		if (typeof input?.name !== 'string' || !input.name.trim() || !Array.isArray(input.applications) || !input.applications.length) {
+			throw new Error('Enter a configuration name and select at least one application.');
 		}
-		const suggestedName = existing?.name ?? (selected.length === 1 ? selected[0].application.name : 'All Microservices');
-		const name = await vscode.window.showInputBox({ title: 'Run Configuration Name', value: suggestedName, validateInput: value => value.trim() ? undefined : 'Enter a configuration name.' });
-		if (!name) {
-			return;
-		}
-		const programArgs: Record<string, string> = { ...(existing?.programArgs ?? {}) };
-		const commandOverrides: Record<string, string> = { ...(existing?.commandOverrides ?? {}) };
-		for (const item of selected) {
-			const application = item.application;
-			if (application.enterprise) {
-				await vscode.commands.executeCommand('orbyte.enterprise.selectProjectServer', vscode.Uri.file(application.root));
+		const applications = [...new Set(input.applications)];
+		const commandOverrides: Record<string, string> = {};
+		const programArgs: Record<string, string> = {};
+		const servers: Record<string, IServerLaunchOptions> = {};
+		for (const id of applications) {
+			const application = this.applicationById(id);
+			if (!application) {
+				throw new Error('One of the selected applications is no longer in this workspace.');
 			}
-			const args = await vscode.window.showInputBox({
-				title: `${application.name} · Program arguments`,
-				value: programArgs[application.id] ?? '',
-				prompt: 'Optional. Leave empty to use framework defaults.',
-			});
-			if (args === undefined) {
-				return;
+			const args = input.programArgs?.[id];
+			const command = input.commandOverrides?.[id];
+			if (typeof args === 'string') {
+				programArgs[id] = args;
 			}
-			programArgs[application.id] = args;
-			const commandChoice = await vscode.window.showQuickPick([
-				{
-					label: '$(sparkle) Use detected command',
-					description: application.command ? `${application.command.executable} ${application.command.args.join(' ')}` : 'Use the framework debugger configuration',
-					value: 'detected' as const,
-				},
-				{ label: '$(terminal) Use a custom command…', description: commandOverrides[application.id] || 'For custom servers, scripts, or C/C++ executables', value: 'custom' as const },
-			], {
-				title: `${application.name} · Launch command`,
-				placeHolder: 'Orbyte detects the normal framework command; customize it only when needed.',
-			});
-			if (!commandChoice) {
-				return;
+			if (typeof command === 'string' && command.trim()) {
+				commandOverrides[id] = command.trim();
 			}
-			if (commandChoice.value === 'custom') {
-				const command = await vscode.window.showInputBox({
-					title: `${application.name} · Custom command`,
-					value: commandOverrides[application.id] ?? '',
-					prompt: 'Enter the complete shell command used to launch this application.',
-					validateInput: value => value.trim() ? undefined : 'Enter a command, or go back and use the detected command.',
-				});
-				if (command === undefined) {
-					return;
+			if (application.language === 'Custom' && !commandOverrides[id]) {
+				throw new Error('Enter a local command for ' + application.name + '.');
+			}
+			const server = input.servers?.[id];
+			if (!commandOverrides[id] && (application.enterprise || (application.serverDeployable && server))) {
+				if (!server || !['wildfly', 'websphere'].includes(server.kind) || typeof server.home !== 'string'
+					|| (server.serverName !== undefined && typeof server.serverName !== 'string')
+					|| (server.artifact !== undefined && typeof server.artifact !== 'string')) {
+					throw new Error('Choose an application server for ' + application.name + '.');
 				}
-				commandOverrides[application.id] = command.trim();
-			} else {
-				delete commandOverrides[application.id];
+				const invalid = validateServerLaunch(server);
+				if (invalid) {
+					throw new Error(invalid);
+				}
+				if (server.artifact && (path.isAbsolute(server.artifact) || server.artifact.split(/[/\\]/).includes('..') || !/\.(ear|war|jar)$/i.test(server.artifact))) {
+					throw new Error('Enter a project-relative EAR, WAR, or JAR artifact path.');
+				}
+				servers[id] = { kind: server.kind, home: server.home, serverName: server.serverName, debugPort: server.debugPort, managementPort: server.managementPort, artifact: server.artifact };
 			}
 		}
-		const configuration: IRunConfiguration = { name: name.trim(), applications: selected.map(item => item.application.id), programArgs, commandOverrides };
-		const configurations = this.configurations().filter(candidate => candidate.name !== existing?.name && candidate.name !== configuration.name);
-		await this.saveConfigurations([...configurations, configuration]);
-		await this.saveSelected(configuration.name);
-		void vscode.window.showInformationMessage(`${configuration.name} is now the active Run Configuration.`);
+		return { name: input.name.trim(), applications, programArgs, commandOverrides, servers };
 	}
 
 	private async runSelected(mode: RunMode): Promise<void> {
@@ -314,17 +304,29 @@ class ApplicationRuntime implements vscode.Disposable {
 		}
 		await this.saveSelected(configuration.name);
 		for (const application of applications) {
-			await this.runApplication(application, mode, configuration.programArgs?.[application.id] ?? '', configuration.commandOverrides?.[application.id]);
+			await this.runApplication(application, mode, configuration.programArgs?.[application.id] ?? '', configuration.commandOverrides?.[application.id], configuration.servers?.[application.id]);
 		}
 	}
 
-	private async runApplication(application: IApplicationDescriptor, mode: RunMode, programArgs: string, commandOverride?: string): Promise<void> {
+	private async runApplication(application: IApplicationDescriptor, mode: RunMode, programArgs: string, commandOverride?: string, server?: IServerLaunchOptions): Promise<void> {
+		if (!vscode.workspace.isTrusted) {
+			void vscode.window.showWarningMessage('Trust this workspace before running an application.');
+			return;
+		}
+		if (server && (application.enterprise || application.serverDeployable) && !commandOverride) {
+			await vscode.commands.executeCommand('orbyte.enterprise.runProject', vscode.Uri.file(application.root), mode === 'debug', server);
+			return;
+		}
 		if (application.language === 'Java' && !commandOverride) {
 			await vscode.commands.executeCommand('orbyte.java.runApplication', application.root, mode, programArgs);
 			return;
 		}
 		if (mode === 'debug' && application.debug && !commandOverride) {
-			const configuration: vscode.DebugConfiguration = { ...application.debug, name: `Debug ${application.name}`, orbyteApplicationId: application.id };
+			const environment = offlineEnvironment();
+			const configuration: vscode.DebugConfiguration = {
+				...application.debug, name: `Debug ${application.name}`, orbyteApplicationId: application.id,
+				...(environment && { env: environment }),
+			};
 			const started = await vscode.debug.startDebugging(vscode.workspace.getWorkspaceFolder(vscode.Uri.file(application.root)), configuration);
 			if (!started) {
 				void vscode.window.showWarningMessage(`The ${application.language} debugger could not start ${application.name}. Install its debugger extension or run the configuration normally.`);
@@ -337,12 +339,15 @@ class ApplicationRuntime implements vscode.Disposable {
 			return;
 		}
 		const args = commandOverride ? [...command.args] : appendProgramArguments(command, programArgs);
+		if (isOffline() && !commandOverride && command.executable === 'dotnet') {
+			args.splice(1, 0, '--no-restore');
+		}
 		const task = new vscode.Task(
 			{ type: 'orbyte-application', application: application.id, mode },
 			vscode.workspace.getWorkspaceFolder(vscode.Uri.file(application.root)) ?? vscode.TaskScope.Workspace,
 			`${mode === 'debug' ? 'Debug' : 'Run'} ${application.name}`,
 			'Orbyte Applications',
-			new vscode.ShellExecution(command.executable, args, { cwd: application.root }),
+			new vscode.ShellExecution(command.executable, args, { cwd: application.root, env: offlineEnvironment() }),
 			[],
 		);
 		task.presentationOptions = { reveal: vscode.TaskRevealKind.Always, panel: vscode.TaskPanelKind.Dedicated, clear: true };
@@ -422,7 +427,15 @@ class ApplicationRuntime implements vscode.Disposable {
 	}
 
 	private applicationById(id: string): IApplicationDescriptor | undefined {
-		return this.applications.find(application => normalizePath(application.id) === normalizePath(id));
+		return this.applications.find(application => normalizePath(application.id) === normalizePath(id))
+			?? this.customApplications().find(application => normalizePath(application.id) === normalizePath(id));
+	}
+
+	private customApplications(): IApplicationDescriptor[] {
+		return (vscode.workspace.workspaceFolders ?? []).map(folder => ({
+			id: `custom:${folder.uri.fsPath}`, root: folder.uri.fsPath, name: folder.name,
+			language: 'Custom', framework: 'Local command',
+		}));
 	}
 
 	private applicationForDebugSession(session: vscode.DebugSession): IApplicationDescriptor | undefined {

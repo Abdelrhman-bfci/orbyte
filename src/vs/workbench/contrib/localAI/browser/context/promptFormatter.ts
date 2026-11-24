@@ -301,9 +301,10 @@ export function formatAgentTesterMessages(request: string, task: ILocalAIAgentFe
 	}];
 }
 
-export function formatAgentRepairMessages(context: ILocalAIContext | undefined, request: string, invalidResponse: string, errors: readonly string[], attachments: readonly ILocalAIAttachment[], workspaceRoots: readonly ILocalAIWorkspaceRootContext[], contextWindowTokens = localLLMMinimumContextTokens): readonly ILocalLLMChatMessage[] {
+export function formatAgentRepairMessages(context: ILocalAIContext | undefined, request: string, invalidResponse: string, errors: readonly string[], attachments: readonly ILocalAIAttachment[], workspaceRoots: readonly ILocalAIWorkspaceRootContext[], contextWindowTokens = localLLMMinimumContextTokens, singleAgent = false): readonly ILocalLLMChatMessage[] {
 	const base = formatChatMessages(context, request, [], 'agent', attachments, workspaceRoots, contextWindowTokens);
 	const feedback = errors.length ? errors.slice(0, 6).join('\n') : 'The response contained no usable edit or create operation.';
+	const repairRole = singleAgent ? 'Revise your previous proposal using the validator output.' : 'You are the Reviewer subagent. Repair the implementer response.';
 	const malformedJavaRepair = errors.some(error => error.includes('Existing Java target is structurally invalid'));
 	if (malformedJavaRepair) {
 		const repairUri = /complete <file> repair for this URI:\s*(\S+)/.exec(feedback)?.[1]
@@ -311,7 +312,7 @@ export function formatAgentRepairMessages(context: ILocalAIContext | undefined, 
 			?? '';
 		return [{
 			role: 'system',
-			content: 'You are the Reviewer subagent for an offline Java coding agent. The existing Java target is structurally invalid, so partial edits cannot be applied safely. Return only one machine-readable XML response with this exact shape: <local_ai_agent_response><summary>short repair summary</summary><changes><file uri="EXACT_REQUIRED_URI"><![CDATA[complete corrected Java file]]></file></changes></local_ai_agent_response>. You MUST return exactly one file operation and no edit, insert, or create operations. Preserve the package, public type name, annotations, intended public API, and unrelated valid behavior. Correct brace placement, imports, field placement, method placement, and collection initialization. Never use an untitled URI or a directory URI. Do not include Markdown or any text outside the XML.',
+			content: `${repairRole} The existing Java target is structurally invalid, so partial edits cannot be applied safely. Return only one machine-readable XML response with this exact shape: <local_ai_agent_response><summary>short repair summary</summary><changes><file uri="EXACT_REQUIRED_URI"><![CDATA[complete corrected Java file]]></file></changes></local_ai_agent_response>. You MUST return exactly one file operation and no edit, insert, or create operations. Preserve the package, public type name, annotations, intended public API, and unrelated valid behavior. Correct brace placement, imports, field placement, method placement, and collection initialization. Never use an untitled URI or a directory URI. Do not include Markdown or any text outside the XML.`,
 		}, {
 			role: 'user',
 			content: `${base.at(-1)!.content}\n<required_file_uri>${cdata(repairUri)}</required_file_uri>\n<reviewer_feedback>${cdata(feedback)}</reviewer_feedback>\nRepair the attached Java file completely. Copy required_file_uri exactly into the single file operation. Do not repeat or imitate the invalid partial edits.`,
@@ -323,7 +324,7 @@ export function formatAgentRepairMessages(context: ILocalAIContext | undefined, 
 		: 'Use only exact existing target URIs.';
 	const reviewerSystem: ILocalLLMChatMessage = {
 		role: 'system',
-		content: `${base[0].content}\nYou are the Reviewer subagent. Correct the invalid implementer operations. ${repairRule} Return one corrected <local_ai_agent_response> and no explanation.`,
+		content: `${base[0].content}\n${repairRole} ${repairRule} Return one corrected <local_ai_agent_response> and no explanation.`,
 	};
 	return [
 		reviewerSystem,
@@ -331,7 +332,7 @@ export function formatAgentRepairMessages(context: ILocalAIContext | undefined, 
 		{ role: 'assistant', content: invalidResponse.slice(0, 12_000) },
 		{
 			role: 'user',
-			content: `<reviewer_feedback>${cdata(feedback)}</reviewer_feedback>\nYou are the Reviewer subagent. Repair the implementer response using the exact allowed existing URIs and workspace roots above. ${repairRule} Return one corrected <local_ai_agent_response> only. Do not explain the error, use untitled: URIs, target a directory, or use Python before_main insertion for Java.`,
+			content: `<reviewer_feedback>${cdata(feedback)}</reviewer_feedback>\n${repairRole} Use the exact allowed existing URIs and workspace roots above. ${repairRule} Return one corrected <local_ai_agent_response> only. Do not explain the error, use untitled: URIs, target a directory, or use Python before_main insertion for Java.`,
 		},
 	];
 }

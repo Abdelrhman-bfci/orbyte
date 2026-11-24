@@ -37,6 +37,29 @@ for (const relativePath of requiredLocalAssets) {
 	}
 }
 
+const windowsIconPath = path.join(repositoryRoot, 'resources/win32/code.ico');
+if (existsSync(windowsIconPath)) {
+	const icon = readFileSync(windowsIconPath);
+	const sizes = new Set();
+	if (icon.length >= 6 && icon.readUInt32LE(0) === 0x00010000) {
+		const count = icon.readUInt16LE(4);
+		for (let offset = 6; offset < 6 + count * 16 && offset + 16 <= icon.length; offset += 16) {
+			const width = icon[offset] || 256;
+			const height = icon[offset + 1] || 256;
+			const length = icon.readUInt32LE(offset + 8);
+			const start = icon.readUInt32LE(offset + 12);
+			if (width === height && length > 0 && start >= 6 + count * 16 && start + length <= icon.length) {
+				sizes.add(width);
+			}
+		}
+	}
+	for (const size of [16, 24, 32, 48, 256]) {
+		if (!sizes.has(size)) {
+			errors.push('The Windows app icon is missing a valid ' + size + '×' + size + ' frame.');
+		}
+	}
+}
+
 for (const relativePath of brandSurfaces) {
 	const source = readFileSync(path.join(repositoryRoot, relativePath), 'utf8');
 	if (/(?:src|icon|logo)\s*[:=]\s*['"`]https?:\/\//iu.test(source)) {

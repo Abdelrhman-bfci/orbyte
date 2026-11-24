@@ -7,8 +7,10 @@ import { existsSync, promises as fs } from 'fs';
 import * as net from 'net';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { resolveProjectJdkEnvironment } from './jdkRuntime';
+import { javaBuildCommand } from './offlineRuntime';
 
-type ServerKind = 'wildfly' | 'websphere';
+export type ServerKind = 'wildfly' | 'websphere';
 type EnterpriseBuildTool = 'maven' | 'gradle' | 'ant';
 type EnterprisePackaging = 'ear' | 'war' | 'ejb' | 'jar';
 
@@ -18,6 +20,39 @@ interface IEnterpriseServer {
 	readonly home?: string;
 	readonly serverName?: string;
 	readonly debugPort: number;
+	readonly managementPort?: number;
+}
+
+export interface IServerLaunchOptions {
+	readonly kind: ServerKind;
+	readonly home: string;
+	readonly serverName?: string;
+	readonly debugPort: number;
+	readonly managementPort?: number;
+	readonly artifact?: string;
+}
+
+export function serverLaunchDefaults(): readonly IServerLaunchOptions[] {
+	return configuredServers().map(server => ({ ...server, home: server.home ?? '' }));
+}
+
+export function validateServerLaunch(value: IServerLaunchOptions): string | undefined {
+	if (!value.home || !path.isAbsolute(value.home) || !isServerInstallationValid({ ...value, label: '' })) {
+		return value.kind === 'wildfly'
+			? 'Choose a JBoss/WildFly installation containing bin/standalone and bin/jboss-cli.'
+			: 'Choose a WebSphere profile containing bin/startServer, bin/stopServer, and bin/wsadmin.';
+	}
+	if (!Number.isInteger(value.debugPort) || value.debugPort < 1 || value.debugPort > 65535) {
+		return 'Enter a debug port from 1 to 65535.';
+	}
+	if (value.kind === 'wildfly' && value.managementPort !== undefined
+		&& (!Number.isInteger(value.managementPort) || value.managementPort < 1 || value.managementPort > 65535 || value.managementPort === value.debugPort)) {
+		return 'Enter a management port from 1 to 65535 that differs from the debug port.';
+	}
+	if (value.kind === 'websphere' && !value.serverName?.trim()) {
+		return 'Enter the WebSphere server name.';
+	}
+	return undefined;
 }
 
 interface IEnterpriseProject {
@@ -45,6 +80,7 @@ export function registerEnterpriseRuntime(context: vscode.ExtensionContext): voi
 
 class EnterpriseRuntime implements vscode.Disposable, vscode.TreeDataProvider<IServerTreeNode>, vscode.CodeLensProvider {
 	private readonly disposables: vscode.Disposable[] = [];
+	private readonly activeServerOptions = new Map<string, IServerLaunchOptions>();
 	private readonly treeChangedEmitter = new vscode.EventEmitter<IServerTreeNode | undefined>();
 	readonly onDidChangeTreeData = this.treeChangedEmitter.event;
 
@@ -65,7 +101,7 @@ class EnterpriseRuntime implements vscode.Disposable, vscode.TreeDataProvider<IS
 			vscode.commands.registerCommand('orbyte.enterprise.deploy', (first?: unknown, second?: vscode.Uri) => this.deployCommand(first, second)),
 			vscode.commands.registerCommand('orbyte.enterprise.hotReload', (resource?: vscode.Uri) => this.hotReload(resource)),
 			vscode.commands.registerCommand('orbyte.enterprise.selectProjectServer', (resource?: vscode.Uri) => this.selectProjectServer(resource, true)),
-			vscode.commands.registerCommand('orbyte.enterprise.runProject', (resource?: vscode.Uri, debug = false) => this.runProject(resource, debug)),
+			vscode.commands.registerCommand('orbyte.enterprise.runProject', (resource?: vscode.Uri, debug = false, options?: IServerLaunchOptions) => this.runProject(resource, debug, options)),
 			vscode.workspace.onDidChangeConfiguration(event => {
 				if (event.affectsConfiguration('orbyte.enterprise')) {
 					this.treeChangedEmitter.fire(undefined);
@@ -244,9 +280,7 @@ class EnterpriseRuntime implements vscode.Disposable, vscode.TreeDataProvider<IS
 			void vscode.window.showWarningMessage('No EJB, EAR, WAR, Jakarta EE, or Java EE project was detected in this workspace.');
 			return;
 		}
-		const buildTask = createEnterpriseBuildTask(project);
-		const buildExecution = await vscode.tasks.executeTask(buildTask);
-		const exitCode = await waitForTask(buildExecution);
+		const exitCode = await executeAndWait(await createEnterpriseBuildTask(project));
 		if (exitCode !== 0) {
 			void vscode.window.showErrorMessage(`Build failed for ${project.name}; deployment was not started.`);
 			return;
@@ -293,40 +327,58 @@ class EnterpriseRuntime implements vscode.Disposable, vscode.TreeDataProvider<IS
 		return selected.kind;
 	}
 
-	private async runProject(resource?: vscode.Uri, debug = false): Promise<boolean> {
+	private async runProject(resource?: vscode.Uri, debug = false, options?: IServerLaunchOptions): Promise<boolean> {
+		if (!vscode.workspace.isTrusted) {
+			void vscode.window.showWarningMessage('Trust this workspace before building and deploying an application.');
+			return false;
+		}
 		const project = await pickEnterpriseProject(resource);
 		if (!project) {
+			void vscode.window.showWarningMessage('No deployable EJB, EAR, or WAR build was found for this application.');
 			return false;
 		}
-		const kind = await this.selectProjectServer(project.root, false);
-		const server = configuredServers().find(candidate => candidate.kind === kind && candidate.home && isServerInstallationValid(candidate));
-		if (!server) {
+		if (options && normalizePath(project.root.fsPath) !== normalizePath(resource?.fsPath ?? '')) {
+			void vscode.window.showWarningMessage('The selected build does not produce a deployable application in this project directory.');
 			return false;
 		}
-		const ready = await this.ensureServerStarted(server, debug);
-		if (!ready) {
-			return true;
+		const kind = options?.kind ?? await this.selectProjectServer(project.root, false);
+		const selectedServer = options ? serverFromOptions(options)
+			: configuredServers().find(candidate => candidate.kind === kind && candidate.home && isServerInstallationValid(candidate));
+		if (!selectedServer) {
+			return false;
 		}
-		const buildExecution = await vscode.tasks.executeTask(createEnterpriseBuildTask(project));
-		if (await waitForTask(buildExecution) !== 0) {
+		const invalid = options && validateServerLaunch(options);
+		if (invalid) {
+			void vscode.window.showErrorMessage(invalid);
+			return false;
+		}
+		if (await executeAndWait(await createEnterpriseBuildTask(project)) !== 0) {
 			void vscode.window.showErrorMessage(`Build failed for ${project.name}; deployment was not started.`);
 			return true;
 		}
-		const artifact = await findDeploymentArtifact(project);
+		const artifact = await findDeploymentArtifact(project, options?.artifact);
 		if (!artifact) {
-			void vscode.window.showErrorMessage(`No ${project.packaging.toUpperCase()} artifact was found after building ${project.name}.`);
+			void vscode.window.showErrorMessage(`No deployment artifact was found at ${options?.artifact || project.packaging.toUpperCase()} after building ${project.name}.`);
 			return true;
 		}
-		const deployment = await vscode.tasks.executeTask(createDeploymentTask(server, project, artifact));
-		if (await waitForTask(deployment) !== 0) {
-			void vscode.window.showErrorMessage(`Deployment failed for ${project.name} on ${server.label}.`);
+		if (!await this.ensureServerStarted(selectedServer, debug && selectedServer.kind === 'wildfly')) {
 			return true;
+		}
+		if (await executeAndWait(createDeploymentTask(selectedServer, project, artifact)) !== 0) {
+			void vscode.window.showErrorMessage(`Deployment failed for ${project.name} on ${selectedServer.label}.`);
+			return true;
+		}
+		const key = normalizePath(project.root.fsPath);
+		if (options) {
+			this.activeServerOptions.set(key, options);
+		} else {
+			this.activeServerOptions.delete(key);
 		}
 		if (debug) {
-			if (await waitForPort('127.0.0.1', server.debugPort, 10_000)) {
-				await attachDebugger(server, project.root.fsPath);
+			if (await waitForPort('127.0.0.1', selectedServer.debugPort, 10_000)) {
+				await attachDebugger(selectedServer, project.root.fsPath);
 			} else {
-				void vscode.window.showWarningMessage(`${project.name} was deployed, but ${server.label} did not expose debug port ${server.debugPort}. Enable server JVM debugging, then use Attach Debugger.`);
+				void vscode.window.showWarningMessage(`${project.name} was deployed, but ${selectedServer.label} did not expose debug port ${selectedServer.debugPort}. Enable server JVM debugging, then use Attach Debugger.`);
 			}
 		}
 		return true;
@@ -334,7 +386,7 @@ class EnterpriseRuntime implements vscode.Disposable, vscode.TreeDataProvider<IS
 
 	private async ensureServerStarted(server: IEnterpriseServer, debug: boolean): Promise<boolean> {
 		if (server.kind === 'wildfly') {
-			const readinessPort = debug ? server.debugPort : 9990;
+			const readinessPort = server.managementPort ?? 9990;
 			if (await canConnect('127.0.0.1', readinessPort)) {
 				return true;
 			}
@@ -349,8 +401,7 @@ class EnterpriseRuntime implements vscode.Disposable, vscode.TreeDataProvider<IS
 			}
 			return ready;
 		}
-		const startExecution = await vscode.tasks.executeTask(createServerTask(server, 'start'));
-		await waitForTask(startExecution, 120_000);
+		await executeAndWait(createServerTask(server, 'start'), 120_000);
 		// WebSphere returns a non-zero code when the named server is already running;
 		// wsadmin below is the authoritative deployment/readiness check.
 		return true;
@@ -358,9 +409,6 @@ class EnterpriseRuntime implements vscode.Disposable, vscode.TreeDataProvider<IS
 
 	private async hotReload(resource?: vscode.Uri): Promise<boolean> {
 		const servers = configuredServers().filter(server => server.home && isServerInstallationValid(server));
-		if (!servers.length) {
-			return false;
-		}
 		const projects = await discoverEnterpriseProjects();
 		const project = resource?.scheme === 'file'
 			? projects.filter(candidate => isWithin(resource.fsPath, candidate.root.fsPath)).sort((left, right) => right.root.fsPath.length - left.root.fsPath.length)[0]
@@ -368,22 +416,30 @@ class EnterpriseRuntime implements vscode.Disposable, vscode.TreeDataProvider<IS
 		if (!project) {
 			return false;
 		}
-		const projectServer = await this.selectProjectServer(project.root, false);
+		const options = this.activeServerOptions.get(normalizePath(project.root.fsPath));
+		if (options && validateServerLaunch(options)) {
+			return false;
+		}
+		if (!options && !servers.length) {
+			return false;
+		}
+		const projectServer = options?.kind ?? vscode.workspace.getConfiguration('orbyte.enterprise')
+			.get<Record<string, ServerKind>>('projectServers', {})[normalizePath(project.root.fsPath)];
 		const preferred = vscode.workspace.getConfiguration('orbyte.hotReload').get<ServerKind | 'auto'>('enterpriseServer', 'auto');
-		const server = servers.find(candidate => candidate.kind === projectServer)
-			?? (preferred === 'auto' ? servers[0] : servers.find(candidate => candidate.kind === preferred) ?? servers[0]);
-		const buildExecution = await vscode.tasks.executeTask(createEnterpriseBuildTask(project, true));
-		if (await waitForTask(buildExecution) !== 0) {
+		const server = options ? serverFromOptions(options) : servers.find(candidate => candidate.kind === (projectServer ?? preferred));
+		if (!server) {
+			return false;
+		}
+		if (await executeAndWait(await createEnterpriseBuildTask(project, true)) !== 0) {
 			void vscode.window.showWarningMessage(`Hot reload build failed for ${project.name}. The server still has the previous deployment.`);
 			return true;
 		}
-		const artifact = await findDeploymentArtifact(project);
+		const artifact = await findDeploymentArtifact(project, options?.artifact);
 		if (!artifact) {
 			void vscode.window.showWarningMessage(`Hot reload could not find the ${project.packaging.toUpperCase()} artifact for ${project.name}.`);
 			return true;
 		}
-		const deployment = await vscode.tasks.executeTask(createDeploymentTask(server, project, artifact, true));
-		if (await waitForTask(deployment) !== 0) {
+		if (await executeAndWait(createDeploymentTask(server, project, artifact, true)) !== 0) {
 			void vscode.window.showWarningMessage(`Hot reload deployment failed for ${project.name} on ${server.label}.`);
 		}
 		return true;
@@ -422,14 +478,19 @@ class EnterpriseRuntime implements vscode.Disposable, vscode.TreeDataProvider<IS
 	}
 }
 
+function serverFromOptions(options: IServerLaunchOptions): IEnterpriseServer {
+	return { ...options, label: options.kind === 'wildfly' ? 'JBoss EAP / WildFly' : 'IBM WebSphere' };
+}
+
 function configuredServers(): IEnterpriseServer[] {
-	const configuration = vscode.workspace.getConfiguration('orbyte.enterprise');
+	const configuration = vscode.workspace.getConfiguration('orbyte.enterprise', null);
 	return [
 		{
 			kind: 'wildfly',
 			label: 'JBoss EAP / WildFly',
 			home: configuration.get<string>('wildfly.home') || undefined,
 			debugPort: configuration.get('wildfly.debugPort', 8787),
+			managementPort: 9990,
 		},
 		{
 			kind: 'websphere',
@@ -533,15 +594,13 @@ function enterpriseProjectName(text: string, root: vscode.Uri, buildTool: Enterp
 	return path.basename(root.fsPath);
 }
 
-function createEnterpriseBuildTask(project: IEnterpriseProject, quiet = false): vscode.Task {
+async function createEnterpriseBuildTask(project: IEnterpriseProject, quiet = false): Promise<vscode.Task> {
 	let executable: string;
 	let args: string[];
 	if (project.buildTool === 'maven') {
-		const wrapper = path.join(project.root.fsPath, process.platform === 'win32' ? 'mvnw.cmd' : 'mvnw');
-		({ executable, args } = wrapperCommand(wrapper, process.platform === 'win32' ? 'mvn.cmd' : 'mvn', ['package']));
+		({ executable, args } = javaBuildCommand(project.root, 'maven', ['package']));
 	} else if (project.buildTool === 'gradle') {
-		const wrapper = path.join(project.root.fsPath, process.platform === 'win32' ? 'gradlew.bat' : 'gradlew');
-		({ executable, args } = wrapperCommand(wrapper, process.platform === 'win32' ? 'gradle.bat' : 'gradle', ['build']));
+		({ executable, args } = javaBuildCommand(project.root, 'gradle', ['build']));
 	} else {
 		executable = process.platform === 'win32' ? 'ant.bat' : 'ant';
 		args = [];
@@ -551,7 +610,7 @@ function createEnterpriseBuildTask(project: IEnterpriseProject, quiet = false): 
 		project.folder,
 		`Build ${project.name}`,
 		'Orbyte Enterprise Java',
-		new vscode.ShellExecution(executable, args, { cwd: project.root.fsPath }),
+		new vscode.ShellExecution(executable, args, { cwd: project.root.fsPath, env: await resolveProjectJdkEnvironment(project.root) }),
 		[],
 	);
 	task.group = vscode.TaskGroup.Build;
@@ -565,10 +624,13 @@ function createServerTask(server: IEnterpriseServer, action: 'start' | 'stop' | 
 	if (server.kind === 'wildfly') {
 		if (action === 'stop') {
 			executable = serverExecutable(server.home!, 'bin', scriptName('jboss-cli'))!;
-			args = ['--connect', '--command=:shutdown'];
+			args = ['--connect', `--controller=127.0.0.1:${server.managementPort ?? 9990}`, '--command=:shutdown'];
 		} else {
 			executable = serverExecutable(server.home!, 'bin', scriptName('standalone'))!;
 			args = action === 'debug' ? ['--debug', String(server.debugPort)] : [];
+			if (server.managementPort && server.managementPort !== 9990) {
+				args.push(`-Djboss.management.http.port=${server.managementPort}`);
+			}
 		}
 	} else {
 		executable = serverExecutable(server.home!, 'bin', scriptName(action === 'stop' ? 'stopServer' : 'startServer'))!;
@@ -588,7 +650,7 @@ function createDeploymentTask(server: IEnterpriseServer, project: IEnterprisePro
 	let args: string[];
 	if (server.kind === 'wildfly') {
 		executable = serverExecutable(server.home!, 'bin', scriptName('jboss-cli'))!;
-		args = ['--connect', `--command=deploy "${artifact.fsPath}" --force`];
+		args = ['--connect', `--controller=127.0.0.1:${server.managementPort ?? 9990}`, `--command=deploy "${artifact.fsPath}" --force`];
 	} else {
 		executable = serverExecutable(server.home!, 'bin', scriptName('wsadmin'))!;
 		const artifactPath = artifact.fsPath.replaceAll('\\', '/').replaceAll("'", "\\'");
@@ -623,7 +685,18 @@ function terminalTask(definition: vscode.TaskDefinition, name: string, executabl
 	return task;
 }
 
-async function findDeploymentArtifact(project: IEnterpriseProject): Promise<vscode.Uri | undefined> {
+async function findDeploymentArtifact(project: IEnterpriseProject, artifact?: string): Promise<vscode.Uri | undefined> {
+	if (artifact) {
+		const candidate = path.resolve(project.root.fsPath, artifact);
+		const [root, realArtifact] = await Promise.all([
+			fs.realpath(project.root.fsPath),
+			fs.realpath(candidate),
+		]).catch(() => [undefined, undefined]);
+		if (root && realArtifact && isWithin(realArtifact, root) && /\.(ear|war|jar)$/i.test(realArtifact) && (await fs.stat(realArtifact)).isFile()) {
+			return vscode.Uri.file(realArtifact);
+		}
+		return undefined;
+	}
 	const patterns = ['target/**/*.{ear,war,jar}', 'build/libs/**/*.{ear,war,jar}', 'dist/**/*.{ear,war,jar}'];
 	const artifacts = (await Promise.all(patterns.map(pattern => vscode.workspace.findFiles(new vscode.RelativePattern(project.root, pattern), undefined, 100)))).flat();
 	const candidates = artifacts.filter(uri => !/(?:-sources|-javadoc|-tests|\.original|plain)\.(?:jar|war|ear)$/i.test(uri.fsPath));
@@ -652,20 +725,29 @@ async function attachDebugger(server: IEnterpriseServer, projectPath?: string): 
 	});
 }
 
-function waitForTask(execution: vscode.TaskExecution, timeoutMs = 10 * 60_000): Promise<number | undefined> {
-	return new Promise(resolve => {
-		const timeout = setTimeout(() => {
-			disposable.dispose();
-			resolve(undefined);
-		}, timeoutMs);
-		const disposable = vscode.tasks.onDidEndTaskProcess(event => {
-			if (event.execution === execution) {
-				clearTimeout(timeout);
-				disposable.dispose();
-				resolve(event.exitCode);
-			}
-		});
+async function executeAndWait(task: vscode.Task, timeoutMs = 10 * 60_000): Promise<number | undefined> {
+	let execution: vscode.TaskExecution | undefined;
+	let finish!: (exitCode: number | undefined) => void;
+	const earlyExitCodes = new Map<vscode.TaskExecution, number | undefined>();
+	const completed = new Promise<number | undefined>(resolve => { finish = resolve; });
+	const subscription = vscode.tasks.onDidEndTaskProcess(event => {
+		if (!execution) {
+			earlyExitCodes.set(event.execution, event.exitCode);
+		} else if (event.execution === execution) {
+			finish(event.exitCode);
+		}
 	});
+	const timeout = setTimeout(() => finish(undefined), timeoutMs);
+	try {
+		execution = await vscode.tasks.executeTask(task);
+		if (earlyExitCodes.has(execution)) {
+			return earlyExitCodes.get(execution);
+		}
+		return await completed;
+	} finally {
+		clearTimeout(timeout);
+		subscription.dispose();
+	}
 }
 
 function normalizePath(value: string): string {
@@ -719,7 +801,7 @@ async function resolveWebSphereProfile(selectedPath: string): Promise<string | u
 }
 
 function isWebSphereProfile(profile: string): boolean {
-	return Boolean(serverExecutable(profile, 'bin', scriptName('startServer')) && serverExecutable(profile, 'bin', scriptName('wsadmin')));
+	return ['startServer', 'stopServer', 'wsadmin'].every(script => serverExecutable(profile, 'bin', scriptName(script)));
 }
 
 function isServerInstallationValid(server: IEnterpriseServer): boolean {
@@ -731,13 +813,6 @@ function isServerInstallationValid(server: IEnterpriseServer): boolean {
 function serverExecutable(home: string, ...segments: string[]): string | undefined {
 	const executable = path.join(home, ...segments);
 	return existsSync(executable) ? executable : undefined;
-}
-
-function wrapperCommand(wrapper: string, fallback: string, args: string[]): { executable: string; args: string[] } {
-	if (!existsSync(wrapper)) {
-		return { executable: fallback, args };
-	}
-	return process.platform === 'win32' ? { executable: wrapper, args } : { executable: '/bin/sh', args: [wrapper, ...args] };
 }
 
 function scriptName(base: string): string {

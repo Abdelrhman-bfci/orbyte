@@ -21,6 +21,7 @@ import { linesDiffComputers } from '../../../../editor/common/diff/linesDiffComp
 import { ILanguageService } from '../../../../editor/common/languages/language.js';
 import { IResolvedTextEditorModel, ITextModelService } from '../../../../editor/common/services/resolverService.js';
 import { localize } from '../../../../nls.js';
+import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
@@ -29,7 +30,7 @@ import { IFileService } from '../../../../platform/files/common/files.js';
 import { IHoverService } from '../../../../platform/hover/browser/hover.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
-import { ILocalAIProviderCatalog, ILocalAIProviderInfo, ILocalLLMChatMessage, ILocalLLMModelCatalog, ILocalLLMModelDownloadEvent, ILocalLLMModelInfo, ILocalLLMService, LocalLLMServerState } from '../../../../platform/localLLM/common/localLLM.js';
+import { ILocalAIProviderCatalog, ILocalAIProviderInfo, ILocalAISyntaxCheck, ILocalLLMChatMessage, ILocalLLMModelCatalog, ILocalLLMModelDownloadEvent, ILocalLLMModelInfo, ILocalLLMService, LocalAIExternalProviderId, LocalAIProviderId, LocalLLMServerState } from '../../../../platform/localLLM/common/localLLM.js';
 import { IMarkdownRendererService } from '../../../../platform/markdown/browser/markdownRenderer.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
@@ -48,6 +49,7 @@ import { parseLocalAIAgentResponse, validateLocalAIAgentProposal } from './conte
 import { ILocalAIContext, ILocalAIContextService } from './context/localAIContext.js';
 import { formatAgentFeatureImplementerMessages, formatAgentFeatureReviewerMessages, formatAgentRepairMessages, formatAgentTaskPlannerMessages, formatAgentTesterMessages, formatChatMessages, ILocalAIAgentFeatureTask, ILocalAIAttachment, ILocalAIWorkspaceRootContext, LocalAIChatMode } from './context/promptFormatter.js';
 import { localAIContextTokens, scoreLocalAIWorkspacePath } from './context/smartWorkspaceContext.js';
+import { checkSpringCrudProposal, createInMemorySpringCrudFiles, getSpringCrudContract } from './context/springCrudProposal.js';
 import { InlineEditController } from './inlineEditController.js';
 
 export interface ILocalAIViewPaneOptions extends IViewletViewOptions {
@@ -69,6 +71,7 @@ interface IChatMessage {
 	readonly attachmentNames?: readonly string[];
 	agentChanges?: IChatAgentChangeSummary[];
 	agentSteps?: IChatAgentStep[];
+	localAgent?: boolean;
 }
 
 type AgentSubagentStatus = 'queued' | 'running' | 'completed' | 'handedOff' | 'skipped' | 'failed';
@@ -128,6 +131,7 @@ interface IAgentWorkflow {
 
 interface IPendingAgentRequest {
 	readonly requestId: string;
+	readonly providerId: LocalAIProviderId;
 	readonly stage: AgentSubagentStage;
 	readonly stepId?: string;
 	readonly targets: readonly IAgentTarget[];
@@ -139,6 +143,7 @@ interface IPendingAgentRequest {
 	readonly plannerResponse?: string;
 	readonly workflow?: IAgentWorkflow;
 	readonly reviewKind?: 'analysis' | 'repairInitial' | 'repairAfterReview';
+	readonly singleAgentAttempt?: number;
 }
 
 interface IPendingAgentFileChange {
@@ -150,12 +155,14 @@ interface IPendingAgentFileChange {
 	readonly addedLines: number;
 	readonly removedLines: number;
 	readonly created?: boolean;
+	readonly deferred?: boolean;
 }
 
 interface IPendingAgentChangeSet {
 	readonly summary: string;
 	readonly message: IChatMessage;
 	readonly files: IPendingAgentFileChange[];
+	error?: string;
 }
 
 const localAIChatHistoryStorageKey = 'localAI.chatHistory';
@@ -166,6 +173,7 @@ const maximumAttachedFiles = 8;
 const maximumAutoDetectedFiles = 4;
 const agentRequestInactivityTimeout = 120_000;
 const maximumInitialPromptTimeout = 30 * 60_000;
+const maximumLocalRepairAttempts = 2;
 export class LocalAIViewPane extends ViewPane {
 
 	static readonly ID = 'workbench.view.localAI';
@@ -187,6 +195,7 @@ export class LocalAIViewPane extends ViewPane {
 	private _modeButton: HTMLButtonElement | undefined;
 	private _modelButton: HTMLButtonElement | undefined;
 	private _messagesContainer: HTMLElement | undefined;
+	private _changeReviewBar: HTMLElement | undefined;
 	private _attachmentsContainer: HTMLElement | undefined;
 	private _input: HTMLTextAreaElement | undefined;
 	private _sendButton: HTMLButtonElement | undefined;
@@ -197,12 +206,19 @@ export class LocalAIViewPane extends ViewPane {
 	private _activeAgentResponse = '';
 	private _pendingAgentRequest: IPendingAgentRequest | undefined;
 	private _pendingAgentChangeSet: IPendingAgentChangeSet | undefined;
+	private _resolvingAgentChanges = false;
 	private _mode: LocalAIChatMode;
 	private _mentionPickerOpen = false;
 	private _modelCatalog: ILocalLLMModelCatalog | undefined;
 	private _modelManagerVisible = false;
 	private _providerCatalog: ILocalAIProviderCatalog | undefined;
 	private _providerManagerVisible = false;
+	private _checkingProviders = false;
+	private _providerOperationPending = false;
+	private _signingInProvider: LocalAIExternalProviderId | undefined;
+	private _cancellingProviderSignIn = false;
+	private _providerMessage: string | undefined;
+	private _localServerState: LocalLLMServerState = 'stopped';
 	private _modelSelectionPending = false;
 	private readonly _chatSessionId: string;
 	private readonly _onDidRequestNewChat: (() => void) | undefined;
@@ -216,7 +232,7 @@ export class LocalAIViewPane extends ViewPane {
 		@IContextKeyService contextKeyService: IContextKeyService,
 		@IViewDescriptorService viewDescriptorService: IViewDescriptorService,
 		@IInstantiationService instantiationService: IInstantiationService,
-		@IOpenerService openerService: IOpenerService,
+		@IOpenerService private readonly _providerOpenerService: IOpenerService,
 		@IThemeService themeService: IThemeService,
 		@IHoverService hoverService: IHoverService,
 		@ILocalLLMService private readonly _localLLMService: ILocalLLMService,
@@ -234,8 +250,9 @@ export class LocalAIViewPane extends ViewPane {
 		@ITextModelService private readonly _textModelService: ITextModelService,
 		@ILanguageService private readonly _languageService: ILanguageService,
 		@ITextFileService private readonly _textFileService: ITextFileService,
+		@ICommandService private readonly _commandService: ICommandService,
 	) {
-		super(options, keybindingService, _contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
+		super(options, keybindingService, _contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, _providerOpenerService, themeService, hoverService);
 		this._chatSessionId = options.localAIChatSessionId ?? 'default';
 		this._onDidRequestNewChat = options.onDidRequestNewChat;
 		this._chatTitle = localize('localAIUntitledChat', "New Chat");
@@ -243,6 +260,7 @@ export class LocalAIViewPane extends ViewPane {
 		this._restoreHistory();
 
 		this._register(this._localLLMService.onDidChangeState(state => this._updateServerState(state.state)));
+		this._register(this._localLLMService.onDidChangeProviders(catalog => this._applyProviderCatalog(catalog)));
 		this._register(this._localLLMService.onDidChangeModels(catalog => {
 			this._modelCatalog = catalog;
 			this._modelManagerVisible = (this._providerCatalog?.selectedProviderId ?? 'local') === 'local' && (catalog.setupRequired || this._modelManagerVisible);
@@ -291,6 +309,8 @@ export class LocalAIViewPane extends ViewPane {
 		}));
 
 		this._messagesContainer = dom.append(container, dom.$('.local-ai-messages'));
+		this._changeReviewBar = dom.append(container, dom.$('.local-ai-change-review-bar'));
+		this._changeReviewBar.hidden = true;
 		const inputArea = dom.append(container, dom.$('.local-ai-input-area'));
 		this._attachmentsContainer = dom.append(inputArea, dom.$('.local-ai-attachments'));
 		this._input = dom.append(inputArea, dom.$('textarea.local-ai-input'));
@@ -363,6 +383,7 @@ export class LocalAIViewPane extends ViewPane {
 		}));
 
 		void this._localLLMService.getState().then(state => this._updateServerState(state.state));
+		this._updateSetupAvailability();
 		void this._initializeModels();
 		this._renderMode();
 		this._renderModelButton();
@@ -416,37 +437,60 @@ export class LocalAIViewPane extends ViewPane {
 	}
 
 	private async _refreshProviders(): Promise<void> {
+		if (this._checkingProviders) {
+			return;
+		}
+		const previous = this._providerCatalog;
+		this._checkingProviders = true;
+		this._renderMessages();
 		try {
-			this._providerCatalog = await this._localLLMService.getProviderCatalog();
-			this._renderModelButton();
-			this._updateSetupAvailability();
-			this._renderMessages();
-			const selected = this._providerCatalog.providers.find(provider => provider.selected);
-			if (this._stateElement && selected?.id !== 'local') {
-				this._stateElement.dataset.state = selected?.installed ? 'ready' : 'error';
-				this._stateElement.textContent = selected?.installed
-					? localize('localAIExternalProviderReady', "{0} CLI ready", selected.name)
-					: localize('localAIExternalProviderMissing', "{0} CLI not found", selected?.name ?? 'AI');
+			const catalog = await this._localLLMService.getProviderCatalog();
+			if (this._providerCatalog === previous) {
+				this._applyProviderCatalog(catalog);
 			}
 		} catch (error) {
 			this._notificationService.error(localize('localAIProviderLoadError', "Unable to detect AI providers: {0}", error instanceof Error ? error.message : String(error)));
+		} finally {
+			this._checkingProviders = false;
+			this._renderMessages();
 		}
 	}
 
+	private _applyProviderCatalog(catalog: ILocalAIProviderCatalog): void {
+		const changed = this._providerCatalog?.selectedProviderId !== catalog.selectedProviderId;
+		this._providerCatalog = catalog;
+		if (catalog.selectedProviderId !== 'local') {
+			this._modelManagerVisible = false;
+		} else if (changed && this._modelCatalog?.setupRequired && !this._providerManagerVisible) {
+			this._modelManagerVisible = true;
+		}
+		this._updateServerState(this._localServerState);
+		this._renderModelButton();
+		this._updateSetupAvailability();
+		this._renderMessages();
+	}
+
 	private async _initializeModels(): Promise<void> {
+		const modelsPromise = this._localLLMService.getModelCatalog().catch(error => {
+			this._notificationService.error(localize('localAIModelInitializationError', "Unable to initialize local models: {0}", error instanceof Error ? error.message : String(error)));
+			return undefined;
+		});
 		try {
-			this._providerCatalog = await this._localLLMService.getProviderCatalog();
-			this._modelCatalog = await this._localLLMService.getModelCatalog();
-			const selectedProvider = this._providerCatalog.providers.find(provider => provider.selected);
-			this._providerManagerVisible = selectedProvider?.id !== 'local' && selectedProvider?.installed === false;
-			this._modelManagerVisible = this._providerCatalog.selectedProviderId === 'local' && this._modelCatalog.setupRequired;
+			const catalog = await this._localLLMService.getProviderCatalog();
+			const current = this._providerCatalog ?? catalog;
+			const selectedProvider = current.providers.find(provider => provider.selected);
+			this._providerManagerVisible ||= selectedProvider?.id !== 'local' && selectedProvider?.authState !== 'signedIn';
+			this._applyProviderCatalog(current);
+			this._modelCatalog = await modelsPromise;
+			if ((this._providerCatalog?.selectedProviderId ?? 'local') === 'local' && this._modelCatalog?.setupRequired && !this._providerManagerVisible) {
+				this._modelManagerVisible = true;
+			}
 			this._renderModelButton();
-			this._renderMessages();
 			this._updateSetupAvailability();
-			if (this._providerCatalog.selectedProviderId === 'local' && !this._modelCatalog.setupRequired) {
+			this._renderMessages();
+			if (this._providerCatalog?.selectedProviderId === 'local' && this._modelCatalog && !this._modelCatalog.setupRequired) {
 				await this._localLLMService.startServer();
 			}
-			await this._refreshProviders();
 		} catch (error) {
 			this._notificationService.error(localize('localAIModelInitializationError', "Unable to initialize local models: {0}", error instanceof Error ? error.message : String(error)));
 		}
@@ -458,9 +502,9 @@ export class LocalAIViewPane extends ViewPane {
 		}
 		const provider = this._providerCatalog?.providers.find(candidate => candidate.selected);
 		const selected = this._modelCatalog?.models.find(model => model.selected);
-		this._renderDropdownButton(this._modelButton, provider?.id !== 'local' ? provider?.name ?? 'AI' : selected?.parameters ?? localize('localAIChooseModelCompact', "Model"));
-		this._modelButton.title = provider?.id !== 'local'
-			? localize('localAICurrentProvider', "Current AI provider: {0}", provider?.name ?? 'AI')
+		this._renderDropdownButton(this._modelButton, provider && provider.id !== 'local' ? provider.name : selected?.parameters ?? localize('localAIChooseModelCompact', "Model"));
+		this._modelButton.title = provider && provider.id !== 'local'
+			? localize('localAICurrentProvider', "Current AI provider: {0}", provider.name)
 			: selected
 			? localize('localAICurrentModel', "Current model: {0}", selected.name)
 			: localize('localAIChooseModel', "Choose a local AI model");
@@ -513,13 +557,14 @@ export class LocalAIViewPane extends ViewPane {
 
 	private _updateSetupAvailability(): void {
 		const selectedProvider = this._providerCatalog?.providers.find(provider => provider.selected);
-		const setupRequired = (this._providerCatalog?.selectedProviderId ?? 'local') === 'local' && this._modelCatalog?.setupRequired === true;
-		const providerUnavailable = selectedProvider?.id !== 'local' && selectedProvider?.installed === false;
-		if (this._input && !this._activeRequestId) {
-			this._input.disabled = setupRequired || providerUnavailable;
+		const setupRequired = selectedProvider?.id === 'local' && (!this._modelCatalog || this._modelCatalog.setupRequired);
+		const providerUnavailable = Boolean(selectedProvider && selectedProvider.id !== 'local' && selectedProvider.authState !== 'signedIn');
+		const disabled = !selectedProvider || setupRequired || providerUnavailable || this._providerOperationPending;
+		if (this._input && !this._activeRequestId && !this._preparingRequest) {
+			this._input.disabled = disabled;
 		}
-		if (this._sendButton && !this._activeRequestId) {
-			this._sendButton.disabled = setupRequired || providerUnavailable;
+		if (this._sendButton && !this._activeRequestId && !this._preparingRequest) {
+			this._sendButton.disabled = disabled;
 		}
 	}
 
@@ -1008,18 +1053,27 @@ export class LocalAIViewPane extends ViewPane {
 
 	private async _send(): Promise<void> {
 		const value = this._input?.value.trim();
-		if (!value || this._preparingRequest || this._activeRequestId) {
+		if (!value || this._input?.disabled || this._preparingRequest || this._activeRequestId) {
 			return;
 		}
+		const providerId = this._providerCatalog?.selectedProviderId ?? 'local';
 		this._preparingRequest = true;
 		this._emitActivity();
 
 		const mode = this._mode;
+		const localAgent = mode === 'agent' && providerId === 'local';
 		if (!this._messages.some(message => message.role === 'user')) {
 			this._chatTitle = value.replace(/\s+/g, ' ').slice(0, 42) || localize('localAIUntitledChat', "New Chat");
 			this._emitActivity();
 		}
 		if (mode === 'agent' && this._pendingAgentChangeSet?.files.length) {
+			if (this._pendingAgentChangeSet.message.localAgent) {
+				this._preparingRequest = false;
+				this._emitActivity();
+				this._focusPendingChangeReview();
+				this._notificationService.warn(localize('localAIReviewBeforeFollowUp', "Accept or reject the current changes before starting another Agent request."));
+				return;
+			}
 			// A follow-up Agent instruction means the user wants to continue from the
 			// staged result. Resolve that result first so the next turn gets a fresh,
 			// current snapshot instead of silently remaining blocked by review state.
@@ -1068,9 +1122,10 @@ export class LocalAIViewPane extends ViewPane {
 		this._messages.push({ role: 'user', content: value, mode, attachmentNames: attachments.map(attachment => attachment.name) });
 		this._messages.push({
 			role: 'assistant',
-			content: mode === 'agent' ? localize('localAIAgentPlannerRunning', "Planner subagent is selecting the relevant files…") : '',
+			content: mode === 'agent' && !localAgent ? localize('localAIAgentPlannerRunning', "Planner subagent is selecting the relevant files…") : '',
 			mode,
-			agentSteps: mode === 'agent' ? [{
+			localAgent,
+			agentSteps: mode === 'agent' && !localAgent ? [{
 				id: 'planner',
 				stage: 'planner',
 				name: localize('localAIPlannerName', "Planner"),
@@ -1086,14 +1141,20 @@ export class LocalAIViewPane extends ViewPane {
 		this._setInputEnabled(false);
 		if (mode === 'agent') {
 			this._preparingRequest = false;
-			await this._startAgentSubagent({
+			const request = {
+				providerId,
 				targets: agentTargets,
 				instruction: value,
 				context,
 				history,
 				attachments,
 				workspaceRoots,
-			}, 'planner', formatAgentTaskPlannerMessages(value, workspaceRoots, agentTargets.map(target => ({ uri: target.resource.toString(), displayPath: target.displayPath })), this._maximumFeatureTasks()));
+			};
+			if (localAgent) {
+				await this._startAgentSubagent({ ...request, singleAgentAttempt: 0 }, 'implementer', formatChatMessages(context, value, history, 'agent', attachments, workspaceRoots, this._contextWindowTokens()));
+			} else {
+				await this._startAgentSubagent(request, 'planner', formatAgentTaskPlannerMessages(value, workspaceRoots, agentTargets.map(target => ({ uri: target.resource.toString(), displayPath: target.displayPath })), this._maximumFeatureTasks()));
+			}
 			return;
 		}
 
@@ -1106,6 +1167,7 @@ export class LocalAIViewPane extends ViewPane {
 			this._scheduleInitialRequestWatchdog(messages);
 			await this._localLLMService.streamChat({
 				requestId,
+				providerId,
 				messages,
 				maxTokens: getLocalLLMGenerationTokens(this._contextWindowTokens(), mode === 'plan' ? 'planner' : 'chat'),
 				temperature: mode === 'plan' ? 0.15 : 0.2,
@@ -1117,7 +1179,7 @@ export class LocalAIViewPane extends ViewPane {
 			this._activeAgentResponse = '';
 			this._pendingAgentRequest = undefined;
 			this._setInputEnabled(true);
-			this._messages.at(-1)!.content = localize('localAIStartError', "Unable to start the local model: {0}", error instanceof Error ? error.message : String(error));
+			this._messages.at(-1)!.content = localize('localAIStartError', "Unable to start the AI provider: {0}", error instanceof Error ? error.message : String(error));
 			this._storeHistory();
 			this._renderMessages();
 		}
@@ -1137,7 +1199,7 @@ export class LocalAIViewPane extends ViewPane {
 	}
 
 	private _contextWindowTokens(): number {
-		if (this._providerCatalog?.selectedProviderId && this._providerCatalog.selectedProviderId !== 'local') {
+		if ((this._pendingAgentRequest?.providerId ?? this._providerCatalog?.selectedProviderId ?? 'local') !== 'local') {
 			return 131_072;
 		}
 		return this._modelCatalog?.models.find(model => model.selected)?.contextWindowTokens ?? localLLMMinimumContextTokens;
@@ -1167,22 +1229,30 @@ export class LocalAIViewPane extends ViewPane {
 					step.status = 'completed';
 				}
 			}
-			this._setAgentStep(response, stage, 'running', stage === 'planner'
-				? localize('localAIAgentPlannerInspecting', "Inspecting the workspace and selecting relevant files.")
-				: stage === 'implementer'
-					? localize('localAIAgentImplementerEditing', "Preparing targeted code changes for the selected files.")
-					: stage === 'reviewer'
-						? localize('localAIAgentReviewerValidating', "Repairing and validating the proposed changes before review.")
-						: localize('localAIAgentTesterRunning', "Checking the feature changes and validation risks."), undefined, base.stepId);
-			response.content = stage === 'planner'
-				? localize('localAIAgentPlannerRunning', "Planner subagent is selecting the relevant files…")
-				: stage === 'implementer'
-					? localize('localAIAgentImplementerRunning', "Implementer subagent is preparing targeted changes…")
-					: stage === 'reviewer'
-						? localize('localAIAgentReviewerRunning', "Reviewer subagent is checking the feature proposal…")
-						: stage === 'tester'
-							? localize('localAIAgentTesterRunningMessage', "Tester subagent is preparing a focused validation plan…")
-							: localize('localAIIntegrationTesterRunningMessage', "Integration Tester is checking cross-feature risks…");
+			if (base.singleAgentAttempt !== undefined) {
+				const detail = base.singleAgentAttempt === 0
+					? localize('localAISingleAgentDrafting', "Preparing a proposal from the relevant workspace files…")
+					: localize('localAISingleAgentRepairing', "Revising the proposal using validation feedback, attempt {0} of {1}…", base.singleAgentAttempt, maximumLocalRepairAttempts);
+				this._setAgentStep(response, stage, 'running', detail, base.targets.map(target => target.displayPath), undefined, localize('localAISingleAgentName', "Local Agent"));
+				response.content = detail;
+			} else {
+				this._setAgentStep(response, stage, 'running', stage === 'planner'
+					? localize('localAIAgentPlannerInspecting', "Inspecting the workspace and selecting relevant files.")
+					: stage === 'implementer'
+						? localize('localAIAgentImplementerEditing', "Preparing targeted code changes for the selected files.")
+						: stage === 'reviewer'
+							? localize('localAIAgentReviewerValidating', "Repairing and validating the proposed changes before review.")
+							: localize('localAIAgentTesterRunning', "Checking the feature changes and validation risks."), undefined, base.stepId);
+				response.content = stage === 'planner'
+					? localize('localAIAgentPlannerRunning', "Planner subagent is selecting the relevant files…")
+					: stage === 'implementer'
+						? localize('localAIAgentImplementerRunning', "Implementer subagent is preparing targeted changes…")
+						: stage === 'reviewer'
+							? localize('localAIAgentReviewerRunning', "Reviewer subagent is checking the feature proposal…")
+							: stage === 'tester'
+								? localize('localAIAgentTesterRunningMessage', "Tester subagent is preparing a focused validation plan…")
+								: localize('localAIIntegrationTesterRunningMessage', "Integration Tester is checking cross-feature risks…");
+			}
 		}
 		this._setInputEnabled(false);
 		this._storeHistory();
@@ -1197,6 +1267,7 @@ export class LocalAIViewPane extends ViewPane {
 			const maxTokens = getLocalLLMGenerationTokens(this._contextWindowTokens(), taskKind);
 			await this._localLLMService.streamChat({
 				requestId,
+				providerId: base.providerId,
 				messages,
 				maxTokens,
 				temperature: stage === 'planner' ? 0.1 : 0.05,
@@ -1848,10 +1919,12 @@ export class LocalAIViewPane extends ViewPane {
 	}
 
 	private _focusPendingChangeReview(): void {
+		this._modelManagerVisible = false;
+		this._providerManagerVisible = false;
 		this._renderMessages();
 		const review = this._messagesContainer?.querySelector<HTMLElement>('.local-ai-change-set');
-		review?.scrollIntoView({ block: 'nearest' });
-		review?.querySelector<HTMLButtonElement>('.local-ai-change-set-actions .local-ai-button:not(.secondary)')?.focus();
+		review?.scrollIntoView({ block: 'start' });
+		review?.querySelector<HTMLButtonElement>('.local-ai-change-file-name')?.focus({ preventScroll: true });
 	}
 
 	private async _handleStreamEnd(requestId: string, error: string | undefined): Promise<void> {
@@ -1873,10 +1946,14 @@ export class LocalAIViewPane extends ViewPane {
 					this._setAgentStep(response, agentRequest.stage, 'failed', localize('localAISubagentFailedDetail', "Failed: {0}", error), undefined, agentRequest.stepId);
 					this._skipUnfinishedAgentSteps(response, localize('localAISubagentSkippedAfterFailure', "Not run because the active subagent failed."));
 				}
-				response.content = localize('localAIResponseError', "Local model error: {0}", error);
+				response.content = localize('localAIResponseError', "AI provider error: {0}", error);
 			}
 			this._pendingAgentRequest = undefined;
 		} else if (response?.role === 'assistant' && response.mode === 'agent' && agentRequest?.requestId === requestId) {
+			if (agentRequest.singleAgentAttempt !== undefined) {
+				await this._validateSingleAgentProposal(agentRequest, agentRequest.singleAgentAttempt, agentResponse, response);
+				return;
+			}
 			if (agentRequest.stage === 'planner') {
 				const targets = await this._targetsFromPlanner(agentRequest, agentResponse);
 				const workflow = this._featureTasksFromPlanner(agentRequest, agentResponse, targets);
@@ -1999,6 +2076,122 @@ export class LocalAIViewPane extends ViewPane {
 		this._renderMessages();
 	}
 
+	private async _validateSingleAgentProposal(request: IPendingAgentRequest, attempt: number, raw: string, response: IChatMessage): Promise<void> {
+		const validationStep = 'local-validation';
+		const validationName = localize('localAISingleAgentValidationName', "Validation");
+		this._activeRequestId = request.requestId;
+		this._setAgentStep(response, 'implementer', 'completed', localize('localAISingleAgentDraftPrepared', "Prepared a draft for validation."));
+		this._setAgentStep(response, 'tester', 'running', localize('localAISingleAgentChecking', "Checking edit operations and running available syntax checks."), undefined, validationStep, validationName);
+		this._renderMessages();
+		const targets = request.targets.map(target => ({ id: target.resource.toString(), displayPath: target.displayPath, originalText: target.originalText }));
+		let parsed = parseLocalAIAgentResponse(raw, targets, request.instruction);
+		const contractErrors: string[] = [];
+		if (request.workspaceRoots.length === 1) {
+			const rootResource = URI.parse(request.workspaceRoots[0].uri);
+			for (const target of request.targets) {
+				const contract = getSpringCrudContract(request.instruction, target.displayPath, target.originalText);
+				if (!contract || !extUri.isEqualOrParent(target.resource, rootResource)) {
+					continue;
+				}
+				const directory = dirname(target.resource);
+				const existingTypes = new Set(request.workspaceRoots[0].files.map(file => basename(URI.file(file))));
+				const expectedFiles = [`${contract.entity}.java`, `${contract.entity}Service.java`, `${contract.entity}Controller.java`];
+				for (const name of expectedFiles) {
+					if (await this._fileService.exists(joinPath(directory, name))) {
+						existingTypes.add(name);
+					}
+				}
+				if (expectedFiles.slice(1).some(name => existingTypes.has(name))) {
+					break;
+				}
+				const created = new Map(parsed.creates.map(file => [basename(URI.parse(file.uri)), file.content]));
+				contractErrors.push(...checkSpringCrudProposal(contract, created, existingTypes));
+				if (contract.boilerplate && (contractErrors.length || parsed.errors.length) && !existingTypes.has(expectedFiles[0])) {
+					const files = createInMemorySpringCrudFiles(contract);
+					const creates = [...files].map(([name, content]) => `<create uri="${this._escapeAgentAttribute(joinPath(directory, name).toString())}">${this._agentCdata(content)}</create>`);
+					const summary = localize('localAIInMemoryCrudProposal', "Prepared {0} with an in-memory CRUD service and REST controller.", contract.entity);
+					raw = `<local_ai_agent_response><summary>${this._agentCdata(summary)}</summary><changes>${creates.join('\n')}</changes></local_ai_agent_response>`;
+					parsed = parseLocalAIAgentResponse(raw, targets, request.instruction);
+					contractErrors.length = 0;
+				}
+				break;
+			}
+		}
+		const errors = [...parsed.errors, ...contractErrors];
+		const checks: ILocalAISyntaxCheck[] = [];
+		for (const file of parsed.files) {
+			const target = request.targets.find(candidate => candidate.resource.toString() === file.targetId);
+			if (target && file.content !== target.originalText) {
+				const validation = validateLocalAIAgentProposal(target.originalText, file.content, request.instruction, target.displayPath);
+				if (!validation.safe) {
+					errors.push(`${target.displayPath}: ${validation.reason ?? 'Unsafe edit'}`);
+				}
+				checks.push({ path: target.displayPath, content: file.content, originalContent: target.originalText });
+			}
+		}
+		const newResources = new Set<string>();
+		if (parsed.creates.length > maximumAutoDetectedFiles) {
+			errors.push(localize('localAISingleAgentCreateLimit', "The current proposal can create up to {0} files. Prioritize the files needed for this change.", maximumAutoDetectedFiles));
+		}
+		for (const create of parsed.creates.slice(0, maximumAutoDetectedFiles)) {
+			const resource = URI.parse(create.uri);
+			const normalized = extUri.normalizePath(resource);
+			const folders = this._workspaceContextService.getWorkspace().folders;
+			if (!isEqual(resource, normalized) || resource.fragment || resource.query || !folders.some(folder => extUri.isEqualOrParent(resource, folder.uri) && !isEqual(resource, folder.uri)) || newResources.has(normalized.toString()) || await this._fileService.exists(resource)) {
+				errors.push(localize('localAISingleAgentInvalidCreate', "Choose a distinct new file path inside the workspace: {0}.", create.uri));
+			} else if (create.content.length > 256 * 1024 || create.content.includes('\0')) {
+				errors.push(localize('localAIAgentCreateInvalidContentReason', "New file content is invalid or oversized: {0}", this._workspaceRelativePath(resource)));
+			} else {
+				newResources.add(normalized.toString());
+				const displayPath = this._workspaceRelativePath(resource);
+				if (displayPath.toLowerCase().endsWith('.java')) {
+					const validation = validateLocalAIAgentProposal('', create.content, request.instruction, displayPath);
+					if (!validation.safe && validation.reason) {
+						errors.push(`${displayPath}: ${validation.reason}`);
+					}
+				}
+				checks.push({ path: displayPath, content: create.content });
+			}
+		}
+		if (!parsed.files.length && !parsed.creates.length && !/<changes\s*(?:\/\s*>|>\s*<\/changes>)/i.test(raw)) {
+			errors.push(localize('localAIAgentNoMachineEdits', "The implementer returned no machine-readable file operations."));
+		}
+		let checked = 0;
+		if (!errors.length) {
+			for (const check of checks) {
+				if (this._pendingAgentRequest !== request) {
+					return;
+				}
+				const result = await this._localLLMService.checkFileSyntax(check);
+				if (result.status === 'failed') {
+					errors.push(`${check.path}: ${result.diagnostic}`);
+				} else if (result.status === 'passed') {
+					checked++;
+				}
+			}
+		}
+		if (this._pendingAgentRequest !== request) {
+			return;
+		}
+		this._activeRequestId = undefined;
+		if (errors.length) {
+			this._setAgentStep(response, 'tester', 'failed', errors[0], checks.map(check => check.path), validationStep, validationName);
+			if (attempt >= maximumLocalRepairAttempts) {
+				this._abortAgentWorkflow(response, localize('localAISingleAgentValidationFailed', "Agent could not prepare changes that passed validation. {0}", errors[0]));
+				return;
+			}
+			this._appendMalformedJavaTargetReasons(request, errors);
+			const attachments = this._agentTargetAttachments(request, request.targets);
+			await this._startAgentSubagent({ ...request, singleAgentAttempt: attempt + 1 }, 'implementer', formatAgentRepairMessages(request.context, request.instruction, raw, errors, attachments, request.workspaceRoots, this._contextWindowTokens(), true));
+			return;
+		}
+		this._setAgentStep(response, 'tester', 'completed', checked
+			? localize('localAISingleAgentSyntaxPassed', "Checked the edit operations and passed syntax checks for {0} file(s).", checked)
+			: localize('localAISingleAgentEditsChecked', "Checked the edit operations. Project tests are available after applying changes."), checks.map(check => check.path), validationStep, validationName);
+		await this._stageAgentResponse(request.requestId, raw, response);
+		this._setInputEnabled(true);
+	}
+
 	private async _collectAgentTargets(attachments: readonly ILocalAIAttachment[]): Promise<IAgentTarget[]> {
 		const editor = getCodeEditor(this._editorService.activeTextEditorControl);
 		const model = editor?.getModel();
@@ -2080,6 +2273,12 @@ export class LocalAIViewPane extends ViewPane {
 					this._notificationService.warn(localize('localAIAgentFileChanged', "{0} changed while Agent was working and was skipped.", target.displayPath));
 					continue;
 				}
+				if (request.singleAgentAttempt !== undefined) {
+					reference.dispose();
+					changes.push(await this._createLocalAgentPreview(target, file.content));
+					stagedResources.add(target.resource.toString());
+					continue;
+				}
 				const originalReference = await this._textModelService.createSyntheticDocument(
 					target.originalText,
 					this._languageService.createById(model.getLanguageId()),
@@ -2134,6 +2333,10 @@ export class LocalAIViewPane extends ViewPane {
 
 			let created = false;
 			try {
+				if (request.singleAgentAttempt !== undefined) {
+					changes.push(await this._createLocalAgentPreview({ resource, displayPath: this._workspaceRelativePath(resource), originalText: '' }, create.content, true));
+					continue;
+				}
 				await this._fileService.createFolder(dirname(resource));
 				await this._fileService.writeFile(resource, VSBuffer.fromString(create.content));
 				created = true;
@@ -2168,6 +2371,18 @@ export class LocalAIViewPane extends ViewPane {
 		}
 
 		if (!changes.length) {
+			if (request.singleAgentAttempt !== undefined) {
+				if (rejectionReasons.length) {
+					this._setAgentStep(response, request.stage, 'failed', rejectionReasons[0]);
+					response.content = rejectionReasons[0];
+				} else {
+					response.content = parsed.summary || localize('localAISingleAgentNoChanges', "Agent returned a proposal with no file changes.");
+				}
+				this._emitActivity();
+				this._storeHistory();
+				this._renderMessages();
+				return;
+			}
 			if (request.stage === 'implementer') {
 				const errors = rejectionReasons.length ? rejectionReasons : [localize('localAIAgentNoMachineEdits', "The implementer returned no machine-readable file operations.")];
 				this._appendMalformedJavaTargetReasons(request, errors);
@@ -2206,6 +2421,21 @@ export class LocalAIViewPane extends ViewPane {
 		await this._openAgentDiff(changes[0]);
 	}
 
+	private async _createLocalAgentPreview(target: IAgentTarget, proposedText: string, created = false): Promise<IPendingAgentFileChange> {
+		const language = this._languageService.createByFilepathOrFirstLine(target.resource);
+		const originalReference = await this._textModelService.createSyntheticDocument(target.originalText, language);
+		try {
+			const reference = await this._textModelService.createSyntheticDocument(proposedText, language);
+			this._agentChangeReferences.add(originalReference);
+			this._agentChangeReferences.add(reference);
+			const lines = this._computeLineChanges(target.originalText, proposedText);
+			return { target, proposedText, reference, originalReference, created, deferred: true, appliedVersionId: reference.object.textEditorModel.getVersionId(), addedLines: lines.added, removedLines: lines.removed };
+		} catch (error) {
+			originalReference.dispose();
+			throw error;
+		}
+	}
+
 	private _appendMalformedJavaTargetReasons(request: IPendingAgentRequest, errors: string[]): void {
 		for (const target of request.targets) {
 			if (!target.displayPath.toLowerCase().endsWith('.java')) {
@@ -2239,25 +2469,64 @@ export class LocalAIViewPane extends ViewPane {
 	private async _openAgentDiff(change: IPendingAgentFileChange): Promise<void> {
 		await this._editorService.openEditor({
 			original: { resource: change.originalReference.object.textEditorModel.uri },
-			modified: { resource: change.target.resource },
+			modified: { resource: change.reference.object.textEditorModel.uri },
 			label: localize('localAIAgentDiffLabel', "{0} — Orbyte Changes", change.target.displayPath),
 			options: { pinned: true },
 		});
 	}
 
 	private async _selectProvider(provider: ILocalAIProviderInfo): Promise<void> {
+		if (this._providerOperationPending || this._preparingRequest || this._activeRequestId || this._pendingAgentRequest) {
+			return;
+		}
+		this._providerOperationPending = true;
+		this._updateSetupAvailability();
 		try {
-			this._providerCatalog = await this._localLLMService.selectProvider(provider.id);
+			const catalog = await this._localLLMService.selectProvider(provider.id);
 			this._providerManagerVisible = false;
-			if (provider.id === 'local' && this._modelCatalog?.setupRequired) {
-				this._modelManagerVisible = true;
-			}
-			this._renderModelButton();
-			this._updateSetupAvailability();
-			this._renderMessages();
-			await this._refreshProviders();
+			this._modelManagerVisible = provider.id === 'local' && this._modelCatalog?.setupRequired === true;
+			this._applyProviderCatalog(catalog);
 		} catch (error) {
 			this._notificationService.error(localize('localAIProviderSelectError', "Unable to use {0}: {1}", provider.name, error instanceof Error ? error.message : String(error)));
+			await this._refreshProviders();
+		} finally {
+			this._providerOperationPending = false;
+			this._updateSetupAvailability();
+			this._renderMessages();
+		}
+	}
+
+	private async _signInToProvider(provider: ILocalAIProviderInfo): Promise<void> {
+		if (provider.id === 'local' || this._signingInProvider) {
+			return;
+		}
+		const id = provider.id;
+		this._signingInProvider = id;
+		this._cancellingProviderSignIn = false;
+		this._providerMessage = localize('localAIProviderBrowserSignIn', "Complete {0} sign-in in your browser.", provider.name);
+		this._updateServerState(this._localServerState);
+		this._renderMessages();
+		try {
+			const catalog = await this._localLLMService.signInToProvider(id);
+			this._applyProviderCatalog(catalog);
+			if (!this._cancellingProviderSignIn) {
+				const signedIn = catalog.providers.find(candidate => candidate.id === id && candidate.authState === 'signedIn');
+				this._providerMessage = signedIn
+					? localize('localAIProviderSignedInMessage', "{0} is signed in.", provider.name)
+					: localize('localAIProviderAuthUnconfirmed', "Could not verify {0} sign-in. Finish setup, then select Refresh.", provider.name);
+				if (id === 'cursor' && signedIn && !signedIn.selected) {
+					await this._selectProvider(signedIn);
+				}
+			}
+		} catch (error) {
+			if (!this._cancellingProviderSignIn) {
+				this._providerMessage = localize('localAIProviderSignInFailed', "{0} sign-in failed: {1}", provider.name, error instanceof Error ? error.message : String(error));
+			}
+		} finally {
+			this._signingInProvider = undefined;
+			this._cancellingProviderSignIn = false;
+			this._updateServerState(this._localServerState);
+			this._renderMessages();
 		}
 	}
 
@@ -2271,14 +2540,27 @@ export class LocalAIViewPane extends ViewPane {
 		const title = dom.append(heading, dom.$('h2'));
 		title.textContent = localize('localAIProviderSettingsTitle', "AI providers");
 		const subtitle = dom.append(heading, dom.$('p'));
-		subtitle.textContent = localize('localAIProviderSettingsDescription', "Use Orbyte's local model or a signed-in CLI already installed on this computer. Agent planning, review, repair, and testing stay enabled.");
-		const closeButton = dom.append(header, dom.$<HTMLButtonElement>('button.local-ai-model-close.codicon.codicon-close'));
+		subtitle.textContent = localize('localAIProviderSettingsDescription', "Connect a provider for Ask, Plan, and Agent.");
+		const headerActions = dom.append(header, dom.$('.local-ai-provider-actions'));
+		const refresh = dom.append(headerActions, dom.$<HTMLButtonElement>('button.local-ai-button.secondary'));
+		refresh.type = 'button';
+		refresh.textContent = this._checkingProviders ? localize('localAICheckingProviders', "Checking…") : localize('localAIRefreshProviders', "Refresh");
+		refresh.disabled = this._checkingProviders;
+		this._messageRenderStore.add(dom.addDisposableListener(refresh, dom.EventType.CLICK, () => {
+			this._providerMessage = undefined;
+			void this._refreshProviders();
+		}));
+		const closeButton = dom.append(headerActions, dom.$<HTMLButtonElement>('button.local-ai-model-close.codicon.codicon-close'));
 		closeButton.type = 'button';
 		closeButton.title = localize('localAICloseProviderSettings', "Close AI provider settings");
 		this._messageRenderStore.add(dom.addDisposableListener(closeButton, dom.EventType.CLICK, () => {
 			this._providerManagerVisible = false;
 			this._renderMessages();
 		}));
+
+		const status = dom.append(manager, dom.$('.local-ai-provider-status'));
+		status.setAttribute('role', 'status');
+		status.textContent = this._providerMessage ?? '';
 
 		const list = dom.append(manager, dom.$('.local-ai-model-list.local-ai-provider-list'));
 		for (const provider of this._providerCatalog?.providers ?? []) {
@@ -2289,24 +2571,82 @@ export class LocalAIViewPane extends ViewPane {
 			const name = dom.append(identity, dom.$('strong'));
 			name.textContent = provider.name;
 			const badges = dom.append(identity, dom.$('.local-ai-model-badges'));
-			const availability = dom.append(badges, dom.$(`span.local-ai-model-badge.${provider.installed ? 'recommended' : ''}`));
-			availability.textContent = provider.id === 'local'
-				? localize('localAIProviderBuiltIn', "Built in")
-				: provider.installed ? localize('localAIProviderDetected', "Detected") : localize('localAIProviderMissing', "Not installed");
-			const action = dom.append(cardHeader, dom.$<HTMLButtonElement>('button.local-ai-button'));
+			const ready = provider.id === 'local' || provider.authState === 'signedIn';
+			const signingIn = this._signingInProvider === provider.id;
+			const availability = dom.append(badges, dom.$('span.local-ai-model-badge'));
+			availability.classList.toggle('recommended', ready);
+			availability.textContent = this._providerStatusLabel(provider);
+			const actions = dom.append(cardHeader, dom.$('.local-ai-provider-actions'));
+			const action = dom.append(actions, dom.$<HTMLButtonElement>('button.local-ai-button'));
 			action.type = 'button';
-			action.textContent = provider.selected ? localize('localAIProviderInUse', "In use") : localize('localAIUseProvider', "Use");
-			action.disabled = provider.selected || !provider.installed;
-			this._messageRenderStore.add(dom.addDisposableListener(action, dom.EventType.CLICK, () => void this._selectProvider(provider)));
+			if (signingIn) {
+				const id = provider.id;
+				action.textContent = localize('localAICancelProviderSignIn', "Cancel sign-in");
+				action.disabled = this._cancellingProviderSignIn;
+				this._messageRenderStore.add(dom.addDisposableListener(action, dom.EventType.CLICK, () => {
+					this._cancellingProviderSignIn = true;
+					this._providerMessage = localize('localAIProviderSignInCancelled', "Sign-in cancelled.");
+					this._renderMessages();
+					void this._localLLMService.cancelProviderSignIn(id);
+				}));
+			} else if (!provider.installed) {
+				action.textContent = provider.id === 'claude'
+					? localize('localAIProviderClaudeSetup', "Set up Claude Code")
+					: localize('localAIProviderInstall', "Install CLI");
+				this._messageRenderStore.add(dom.addDisposableListener(action, dom.EventType.CLICK, () => this._openProviderSetup(provider)));
+			} else if (!ready) {
+				action.textContent = localize('localAISignInProvider', "Sign in");
+				action.disabled = Boolean(this._signingInProvider);
+				this._messageRenderStore.add(dom.addDisposableListener(action, dom.EventType.CLICK, () => void this._signInToProvider(provider)));
+			} else {
+				action.textContent = provider.selected ? localize('localAIProviderInUse', "In use") : localize('localAIUseProvider', "Use");
+				action.disabled = provider.selected || this._providerOperationPending || this._preparingRequest || Boolean(this._activeRequestId || this._pendingAgentRequest);
+				this._messageRenderStore.add(dom.addDisposableListener(action, dom.EventType.CLICK, () => void this._selectProvider(provider)));
+			}
 			const description = dom.append(card, dom.$('.local-ai-model-description'));
 			description.textContent = provider.description;
-			if (!provider.installed && provider.id !== 'local') {
+			if (provider.id !== 'local' && !ready) {
 				const command = dom.append(card, dom.$('.local-ai-provider-command'));
-				command.textContent = localize('localAIProviderCommandHint', "Install and sign in to the {0} command, then reopen these settings.", provider.command);
+				command.textContent = provider.id === 'claude'
+					? localize('localAIProviderClaudeSignInHint', "Anthropic handles subscription sign-in in Claude Code.")
+					: !provider.installed
+						? localize('localAIProviderInstallHint', "Follow the provider’s installation guide, then select Refresh.")
+						: localize('localAIProviderSignInHint', "Sign-in opens the provider’s browser flow.");
+				if (provider.installed && provider.setupUrl) {
+					const setup = dom.append(card, dom.$<HTMLButtonElement>('button.local-ai-button.secondary.local-ai-provider-help'));
+					setup.type = 'button';
+					setup.textContent = localize('localAIProviderSetupHelp', "Setup help");
+					this._messageRenderStore.add(dom.addDisposableListener(setup, dom.EventType.CLICK, () => this._openProviderSetup(provider)));
+				}
 			}
 		}
 		const note = dom.append(manager, dom.$('.local-ai-model-privacy'));
-		note.textContent = localize('localAIProviderPrivacy', "Orbyte never stores provider passwords or API keys. Authentication remains in Codex, Cursor, or Claude on this computer.");
+		note.textContent = localize('localAIProviderPrivacy', "External providers receive your chat and the context included with it.");
+	}
+
+	private _openProviderSetup(provider: ILocalAIProviderInfo): void {
+		if (provider.setupUrl) {
+			void this._providerOpenerService.open(URI.parse(provider.setupUrl), { openExternal: true });
+		}
+	}
+
+	private _providerStatusLabel(provider: ILocalAIProviderInfo): string {
+		if (provider.id === 'local') {
+			return localize('localAIProviderBuiltIn', "Built in");
+		}
+		if (this._signingInProvider === provider.id) {
+			return localize('localAIProviderSigningIn', "Signing in…");
+		}
+		if (!provider.installed) {
+			return provider.id === 'claude'
+				? localize('localAIProviderClaudeMissing', "Claude Code required")
+				: localize('localAIProviderMissing', "CLI not installed");
+		}
+		switch (provider.authState) {
+			case 'signedIn': return localize('localAIProviderSignedIn', "Signed in");
+			case 'signedOut': return localize('localAIProviderSignedOut', "Sign-in required");
+			default: return localize('localAIProviderStatusUnknown', "Sign-in unverified");
+		}
 	}
 
 	private _renderModelManager(): void {
@@ -2432,6 +2772,7 @@ export class LocalAIViewPane extends ViewPane {
 		}
 
 		this._messageRenderStore.clear();
+		this._renderChangeReviewBar();
 		dom.clearNode(this._messagesContainer);
 		if (this._providerManagerVisible) {
 			this._renderProviderManager();
@@ -2458,7 +2799,7 @@ export class LocalAIViewPane extends ViewPane {
 			const privacy = dom.append(empty, dom.$('.local-ai-empty-privacy'));
 			const selectedProvider = this._providerCatalog?.providers.find(provider => provider.selected);
 			privacy.textContent = selectedProvider && selectedProvider.id !== 'local'
-				? localize('localAIEmptyExternalPrivacy', "Uses the signed-in {0} CLI on this computer. Orbyte does not store its credentials.", selectedProvider.name)
+				? localize('localAIEmptyExternalPrivacy', "{0} receives your messages and the selected project context.", selectedProvider.name)
 				: localize('localAIEmptyPrivacy', "Runs locally. Your code stays in your orbit.");
 			return;
 		}
@@ -2564,6 +2905,12 @@ export class LocalAIViewPane extends ViewPane {
 			: accepted === 0
 				? localize('localAIRejectedChangesCount', "Rejected changes to {0} file(s)", rejected)
 				: localize('localAIResolvedChangesCount', "Resolved changes: {0} accepted, {1} rejected", accepted, rejected);
+		if (message.localAgent && accepted > 0 && this._pendingAgentChangeSet?.message !== message && this._workspaceContextService.getWorkspace().folders.length) {
+			const test = dom.append(header, dom.$<HTMLButtonElement>('button.local-ai-button.secondary'));
+			test.type = 'button';
+			test.textContent = localize('localAIRunProjectTests', "Run Project Tests");
+			this._messageRenderStore.add(dom.addDisposableListener(test, dom.EventType.CLICK, () => void this._commandService.executeCommand('workbench.action.tasks.test').catch(error => this._notificationService.error(error))));
+		}
 
 		const files = dom.append(container, dom.$('.local-ai-change-files'));
 		for (const change of message.agentChanges) {
@@ -2586,6 +2933,49 @@ export class LocalAIViewPane extends ViewPane {
 		}
 	}
 
+	private _renderChangeReviewBar(): void {
+		const bar = this._changeReviewBar;
+		if (!bar) {
+			return;
+		}
+		dom.clearNode(bar);
+		const changeSet = this._pendingAgentChangeSet;
+		bar.hidden = !changeSet?.files.length;
+		if (!changeSet?.files.length) {
+			return;
+		}
+
+		const row = dom.append(bar, dom.$('.local-ai-change-review-row'));
+		const status = dom.append(row, dom.$('.local-ai-change-review-status'));
+		status.setAttribute('role', 'status');
+		const allNew = changeSet.files.every(change => change.created && change.deferred);
+		status.textContent = this._resolvingAgentChanges
+			? localize('localAIResolvingChanges', "Updating changes…")
+			: allNew
+				? localize('localAINewFilesReady', "New files ready to create ({0})", changeSet.files.length)
+				: localize('localAIChangesReady', "Files ready to apply ({0})", changeSet.files.length);
+		const actions = dom.append(row, dom.$('.local-ai-change-review-actions'));
+		const review = dom.append(actions, dom.$<HTMLButtonElement>('button.local-ai-button.secondary'));
+		review.type = 'button';
+		review.textContent = localize('localAIReviewFiles', "Review Files");
+		this._messageRenderStore.add(dom.addDisposableListener(review, dom.EventType.CLICK, () => this._focusPendingChangeReview()));
+		const discard = dom.append(actions, dom.$<HTMLButtonElement>('button.local-ai-button.secondary'));
+		discard.type = 'button';
+		discard.textContent = localize('localAIRejectAll', "Reject All");
+		discard.disabled = this._resolvingAgentChanges;
+		this._messageRenderStore.add(dom.addDisposableListener(discard, dom.EventType.CLICK, () => void this._rejectAllAgentChanges()));
+		const apply = dom.append(actions, dom.$<HTMLButtonElement>('button.local-ai-button'));
+		apply.type = 'button';
+		apply.textContent = allNew ? localize('localAICreatePendingFiles', "Create Files") : localize('localAIApplyPendingChanges', "Apply Changes");
+		apply.disabled = this._resolvingAgentChanges;
+		this._messageRenderStore.add(dom.addDisposableListener(apply, dom.EventType.CLICK, () => void this._acceptAllAgentChanges()));
+		if (changeSet.error) {
+			const error = dom.append(bar, dom.$('.local-ai-change-review-error'));
+			error.setAttribute('role', 'alert');
+			error.textContent = changeSet.error;
+		}
+	}
+
 	private _renderPendingChangeSet(): void {
 		const changeSet = this._pendingAgentChangeSet;
 		if (!changeSet?.files.length || !this._messagesContainer) {
@@ -2597,22 +2987,12 @@ export class LocalAIViewPane extends ViewPane {
 		const title = dom.append(header, dom.$('span.local-ai-change-set-title'));
 		const totalAdded = changeSet.files.reduce((total, change) => total + change.addedLines, 0);
 		const totalRemoved = changeSet.files.reduce((total, change) => total + change.removedLines, 0);
-		title.textContent = localize('localAIPendingChangesCount', "{0} file(s) changed", changeSet.files.length);
+		title.textContent = localize('localAIPendingChangesCount', "Proposed files ({0})", changeSet.files.length);
 		const totals = dom.append(header, dom.$('.local-ai-change-totals'));
 		const addedTotal = dom.append(totals, dom.$('span.local-ai-change-added'));
 		addedTotal.textContent = `+${totalAdded}`;
 		const removedTotal = dom.append(totals, dom.$('span.local-ai-change-removed'));
 		removedTotal.textContent = `−${totalRemoved}`;
-		const actions = dom.append(header, dom.$('.local-ai-change-set-actions'));
-		const rejectAllButton = dom.append(actions, dom.$<HTMLButtonElement>('button.local-ai-button.secondary'));
-		rejectAllButton.type = 'button';
-		rejectAllButton.textContent = localize('localAIRejectAll', "Reject All");
-		const acceptAllButton = dom.append(actions, dom.$<HTMLButtonElement>('button.local-ai-button'));
-		acceptAllButton.type = 'button';
-		acceptAllButton.textContent = localize('localAIAcceptAll', "Accept All");
-		this._messageRenderStore.add(dom.addDisposableListener(rejectAllButton, dom.EventType.CLICK, () => void this._rejectAllAgentChanges()));
-		this._messageRenderStore.add(dom.addDisposableListener(acceptAllButton, dom.EventType.CLICK, () => void this._acceptAllAgentChanges()));
-
 		const files = dom.append(container, dom.$('.local-ai-change-files'));
 		for (const change of changeSet.files) {
 			const row = dom.append(files, dom.$('.local-ai-change-file'));
@@ -2631,18 +3011,45 @@ export class LocalAIViewPane extends ViewPane {
 			const rejectButton = dom.append(fileActions, dom.$<HTMLButtonElement>('button.local-ai-change-action'));
 			rejectButton.type = 'button';
 			rejectButton.textContent = localize('localAIReject', "Reject");
+			rejectButton.disabled = this._resolvingAgentChanges;
 			const acceptButton = dom.append(fileActions, dom.$<HTMLButtonElement>('button.local-ai-change-action.accept'));
 			acceptButton.type = 'button';
-			acceptButton.textContent = localize('localAIAccept', "Accept");
-			this._messageRenderStore.add(dom.addDisposableListener(rejectButton, dom.EventType.CLICK, () => void this._rejectAgentChange(change)));
-			this._messageRenderStore.add(dom.addDisposableListener(acceptButton, dom.EventType.CLICK, () => void this._acceptAgentChange(change)));
+			acceptButton.textContent = change.created && change.deferred ? localize('localAICreateSingleFile', "Create") : localize('localAIAccept', "Accept");
+			acceptButton.disabled = this._resolvingAgentChanges;
+			this._messageRenderStore.add(dom.addDisposableListener(rejectButton, dom.EventType.CLICK, () => void this._resolveAgentChanges('rejected', [change])));
+			this._messageRenderStore.add(dom.addDisposableListener(acceptButton, dom.EventType.CLICK, () => void this._resolveAgentChanges('accepted', [change])));
 		}
 	}
 
 	private async _acceptAgentChange(change: IPendingAgentFileChange): Promise<void> {
 		const model = change.reference.object.textEditorModel;
 		if (model.getVersionId() !== change.appliedVersionId) {
-			this._notificationService.warn(localize('localAIChangedAfterProposal', "{0} was edited after Agent prepared it. Review those edits before accepting or rejecting.", change.target.displayPath));
+			throw new Error(localize('localAIChangedAfterProposal', "{0} was edited after Agent prepared it. Review those edits before accepting or rejecting.", change.target.displayPath));
+		}
+		if (change.deferred) {
+			if (change.created) {
+				await this._fileService.createFile(change.target.resource, VSBuffer.fromString(change.proposedText), { overwrite: false });
+			} else {
+				const reference = await this._textModelService.createModelReference(change.target.resource);
+				try {
+					const target = reference.object.textEditorModel;
+					const current = target.getValue();
+					if (current !== change.target.originalText && current !== change.proposedText) {
+						throw new Error(localize('localAIChangedAfterProposal', "{0} was edited after Agent prepared it. Review those edits before accepting or rejecting.", change.target.displayPath));
+					}
+					if (current !== change.proposedText) {
+						target.pushStackElement();
+						target.pushEditOperations(null, [{ range: target.getFullModelRange(), text: change.proposedText }], () => null);
+						target.pushStackElement();
+					}
+					if (!await this._textFileService.save(change.target.resource)) {
+						throw new Error(localize('localAIAcceptSaveFailed', "Unable to save accepted changes to {0}.", change.target.displayPath));
+					}
+				} finally {
+					reference.dispose();
+				}
+			}
+			this._removeAgentChange(change, 'accepted');
 			return;
 		}
 		if (change.created) {
@@ -2652,8 +3059,7 @@ export class LocalAIViewPane extends ViewPane {
 		}
 		const saved = await this._textFileService.save(change.target.resource);
 		if (!saved) {
-			this._notificationService.error(localize('localAIAcceptSaveFailed', "Unable to save accepted changes to {0}.", change.target.displayPath));
-			return;
+			throw new Error(localize('localAIAcceptSaveFailed', "Unable to save accepted changes to {0}.", change.target.displayPath));
 		}
 		this._removeAgentChange(change, 'accepted');
 		this._notificationService.info(localize('localAIAcceptedFile', "Accepted changes to {0}.", change.target.displayPath));
@@ -2662,7 +3068,10 @@ export class LocalAIViewPane extends ViewPane {
 	private async _rejectAgentChange(change: IPendingAgentFileChange): Promise<void> {
 		const model = change.reference.object.textEditorModel;
 		if (model.getVersionId() !== change.appliedVersionId) {
-			this._notificationService.warn(localize('localAIChangedAfterProposal', "{0} was edited after Agent prepared it. Review those edits before accepting or rejecting.", change.target.displayPath));
+			throw new Error(localize('localAIChangedAfterProposal', "{0} was edited after Agent prepared it. Review those edits before accepting or rejecting.", change.target.displayPath));
+		}
+		if (change.deferred) {
+			this._removeAgentChange(change, 'rejected');
 			return;
 		}
 		if (change.created) {
@@ -2675,14 +3084,40 @@ export class LocalAIViewPane extends ViewPane {
 	}
 
 	private async _acceptAllAgentChanges(): Promise<void> {
-		for (const change of [...(this._pendingAgentChangeSet?.files ?? [])]) {
-			await this._acceptAgentChange(change);
-		}
+		await this._resolveAgentChanges('accepted');
 	}
 
 	private async _rejectAllAgentChanges(): Promise<void> {
-		for (const change of [...(this._pendingAgentChangeSet?.files ?? [])]) {
-			await this._rejectAgentChange(change);
+		await this._resolveAgentChanges('rejected');
+	}
+
+	private async _resolveAgentChanges(state: IChatAgentChangeSummary['state'], files?: readonly IPendingAgentFileChange[]): Promise<void> {
+		const changeSet = this._pendingAgentChangeSet;
+		if (!changeSet || this._resolvingAgentChanges) {
+			return;
+		}
+		this._resolvingAgentChanges = true;
+		changeSet.error = undefined;
+		const changes = files ?? [...changeSet.files];
+		this._renderMessages();
+		try {
+			for (const change of changes) {
+				if (state === 'accepted') {
+					await this._acceptAgentChange(change);
+				} else {
+					await this._rejectAgentChange(change);
+				}
+			}
+			if (state === 'accepted' && changes.every(change => change.deferred)) {
+				this._notificationService.info(changes.every(change => change.created)
+					? localize('localAICreatedPendingFiles', "Created {0} file(s).", changes.length)
+					: localize('localAIAppliedPendingChanges', "Applied changes to {0} file(s).", changes.length));
+			}
+		} catch (error) {
+			changeSet.error = error instanceof Error ? error.message : String(error);
+		} finally {
+			this._resolvingAgentChanges = false;
+			this._renderMessages();
 		}
 	}
 
@@ -2759,6 +3194,9 @@ export class LocalAIViewPane extends ViewPane {
 		if (this._stopButton) {
 			this._stopButton.hidden = enabled;
 		}
+		if (enabled) {
+			this._updateSetupAvailability();
+		}
 		if (enabled && this.isBodyVisible()) {
 			this._input?.focus();
 		}
@@ -2816,7 +3254,7 @@ export class LocalAIViewPane extends ViewPane {
 							};
 						})
 						: undefined;
-					this._messages.push({ role: candidate.role, content, mode, attachmentNames, agentChanges, agentSteps });
+					this._messages.push({ role: candidate.role, content, mode, attachmentNames, agentChanges, agentSteps, localAgent: candidate.localAgent === true });
 				}
 			}
 			const firstUserMessage = this._messages.find(message => message.role === 'user');
@@ -2838,7 +3276,14 @@ export class LocalAIViewPane extends ViewPane {
 	}
 
 	private _updateServerState(state: LocalLLMServerState): void {
+		this._localServerState = state;
 		if (!this._stateElement) {
+			return;
+		}
+		const provider = this._providerCatalog?.providers.find(candidate => candidate.selected);
+		if (provider && provider.id !== 'local') {
+			this._stateElement.dataset.state = provider.authState === 'signedIn' ? 'ready' : 'error';
+			this._stateElement.textContent = `${provider.name} · ${this._providerStatusLabel(provider)}`;
 			return;
 		}
 		this._stateElement.dataset.state = state;

@@ -3,10 +3,11 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { existsSync, promises as fs } from 'fs';
+import { promises as fs } from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { configuredJdkEnvironment } from './jdkRuntime';
+import { configuredJdkEnvironment, resolveProjectJdkEnvironment } from './jdkRuntime';
+import { javaBuildCommand } from './offlineRuntime';
 
 type BuildTool = 'maven' | 'gradle' | 'ant' | 'java';
 type ProjectAction = 'run' | 'debug' | 'build' | 'test';
@@ -20,6 +21,7 @@ interface IJavaProject {
 	readonly buildTool: BuildTool;
 	readonly framework: JavaFramework;
 	readonly enterprise: boolean;
+	readonly serverDeployable: boolean;
 	readonly springBoot: boolean;
 	readonly springDevtools: boolean;
 	readonly mainClass?: string;
@@ -89,6 +91,7 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 					language: 'Java',
 					root: project.root.fsPath,
 					enterprise: project.enterprise,
+					serverDeployable: project.serverDeployable,
 				}));
 			}),
 			vscode.commands.registerCommand('orbyte.java.runApplication', (projectPath: string, mode: ActiveApplicationMode = 'run', programArgs = '') => this.runProjectByPath(projectPath, mode, programArgs)),
@@ -302,7 +305,7 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 			await this.startProject(project, action, '');
 			return;
 		}
-		await vscode.tasks.executeTask(this.createTask(project, action));
+		await vscode.tasks.executeTask(this.createTask(project, action, await resolveProjectJdkEnvironment(project.root, project.root.fsPath)));
 	}
 
 	private async runProjectByPath(projectPath: string, mode: ActiveApplicationMode, programArgs: string): Promise<boolean> {
@@ -324,12 +327,24 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 	}
 
 	private async startProject(project: IJavaProject, mode: ActiveApplicationMode, programArgs: string): Promise<void> {
+		if (!vscode.workspace.isTrusted) {
+			void vscode.window.showWarningMessage('Trust this workspace before running the Java project.');
+			return;
+		}
 		if (project.enterprise) {
 			await vscode.commands.executeCommand('orbyte.enterprise.runProject', project.root, mode === 'debug');
 			return;
 		}
-		if (project.mainClass) {
-			await this.startJava(project, mode === 'run', programArgs);
+		const sdk = await resolveProjectJdkEnvironment(project.root, project.root.fsPath);
+		if (!sdk) {
+			const action = await vscode.window.showWarningMessage(`No compatible local JDK was found for ${project.name}.`, 'Select JDK');
+			if (action) {
+				await vscode.commands.executeCommand('orbyte.java.configureJdk', project.root);
+			}
+			return;
+		}
+		if (project.mainClass && !(mode === 'run' && project.springBoot && (project.buildTool === 'maven' || project.buildTool === 'gradle'))) {
+			await this.startJava(project, mode === 'run', programArgs, sdk);
 			return;
 		}
 		const command = frameworkRunCommand(project, mode === 'debug');
@@ -337,7 +352,10 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 			void vscode.window.showErrorMessage(`Orbyte detected ${frameworkLabel(project.framework)} in ${project.name}, but could not find a main class or a supported development command.`);
 			return;
 		}
-		const execution = await vscode.tasks.executeTask(this.createRunTask(project, command));
+		if (programArgs && project.springBoot) {
+			command.args.push(project.buildTool === 'maven' ? `-Dspring-boot.run.arguments=${programArgs}` : `--args=${programArgs}`);
+		}
+		const execution = await vscode.tasks.executeTask(this.createRunTask(project, command, sdk));
 		this.trackTask(execution);
 	}
 
@@ -378,7 +396,7 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 			project.folder,
 			`Hot Reload ${project.name}`,
 			'Orbyte Hot Reload',
-			new vscode.ShellExecution(command.executable, command.args, { cwd: project.root.fsPath, env: configuredJdkEnvironment(project.root) }),
+			new vscode.ShellExecution(command.executable, command.args, { cwd: project.root.fsPath, env: await resolveProjectJdkEnvironment(project.root, project.root.fsPath) }),
 			[],
 		);
 		task.presentationOptions = { reveal: vscode.TaskRevealKind.Silent, panel: vscode.TaskPanelKind.Dedicated, clear: false };
@@ -471,7 +489,7 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 		this.updateStatusBar();
 	}
 
-	private async startJava(project: IJavaProject, noDebug: boolean, programArgs = ''): Promise<void> {
+	private async startJava(project: IJavaProject, noDebug: boolean, programArgs: string, jdkEnvironment: Record<string, string>): Promise<void> {
 		if (!project.mainClass) {
 			void vscode.window.showErrorMessage(`Orbyte could not find a main class under ${project.name}/src/main.`);
 			return;
@@ -485,15 +503,22 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 			}
 			return;
 		}
-		await Promise.all([languageExtension.activate(), debuggerExtension.activate()]);
-		const started = await vscode.debug.startDebugging(project.folder, this.debugConfiguration(project, noDebug, programArgs));
+		try {
+			await Promise.all([languageExtension.activate(), debuggerExtension.activate()]);
+		} catch (error) {
+			const action = await vscode.window.showErrorMessage(`Java tooling could not start: ${error instanceof Error ? error.message : String(error)}`, 'Environment Setup');
+			if (action) {
+				await vscode.commands.executeCommand('orbyte.java.configureJdk', project.root);
+			}
+			return;
+		}
+		const started = await vscode.debug.startDebugging(project.folder, this.debugConfiguration(project, noDebug, programArgs, jdkEnvironment));
 		if (!started) {
 			void vscode.window.showErrorMessage(`Could not ${noDebug ? 'run' : 'debug'} ${project.mainClass}. Check the Java runtime configured for this workspace.`);
 		}
 	}
 
-	private debugConfiguration(project: IJavaProject, noDebug: boolean, programArgs = ''): vscode.DebugConfiguration {
-		const jdkEnvironment = configuredJdkEnvironment(project.root);
+	private debugConfiguration(project: IJavaProject, noDebug: boolean, programArgs = '', jdkEnvironment = configuredJdkEnvironment(project.root)): vscode.DebugConfiguration {
 		return {
 			type: 'java',
 			request: 'launch',
@@ -503,28 +528,28 @@ class JavaProjectRuntime implements vscode.Disposable, vscode.CodeLensProvider, 
 			console: 'integratedTerminal',
 			noDebug,
 			env: jdkEnvironment,
+			javaExec: jdkEnvironment && path.join(jdkEnvironment.JAVA_HOME, 'bin', process.platform === 'win32' ? 'java.exe' : 'java'),
 			args: programArgs,
 			orbyteProject: project.root.fsPath,
 			orbyteMode: noDebug ? 'run' : 'debug',
 		};
 	}
 
-	private createRunTask(project: IJavaProject, command: { executable: string; args: string[] }): vscode.Task {
+	private createRunTask(project: IJavaProject, command: { executable: string; args: string[] }, jdkEnvironment: Record<string, string>): vscode.Task {
 		const task = new vscode.Task(
 			{ type: 'orbyte-java', action: 'run', project: project.root.fsPath },
 			project.folder,
 			`Run ${project.name} (${frameworkLabel(project.framework)})`,
 			'Orbyte Applications',
-			new vscode.ShellExecution(command.executable, command.args, { cwd: project.root.fsPath, env: configuredJdkEnvironment(project.root) }),
+			new vscode.ShellExecution(command.executable, command.args, { cwd: project.root.fsPath, env: jdkEnvironment }),
 			[],
 		);
 		task.presentationOptions = { reveal: vscode.TaskRevealKind.Always, panel: vscode.TaskPanelKind.Dedicated, clear: true };
 		return task;
 	}
 
-	private createTask(project: IJavaProject, action: Exclude<ProjectAction, 'debug'>): vscode.Task {
+	private createTask(project: IJavaProject, action: Exclude<ProjectAction, 'debug'>, jdkEnvironment = configuredJdkEnvironment(project.root)): vscode.Task {
 		const command = commandFor(project, action);
-		const jdkEnvironment = configuredJdkEnvironment(project.root);
 		const task = new vscode.Task(
 			{ type: 'orbyte-java', action, project: project.root.fsPath },
 			project.folder,
@@ -673,7 +698,9 @@ async function inspectProject(candidate: IProjectCandidate): Promise<IJavaProjec
 	let mainClass: string | undefined;
 	let mainUri: vscode.Uri | undefined;
 	let framework = detectFramework(buildText);
-	let enterprise = framework === 'jakarta-ee' || /<packaging>\s*(?:ear|ejb)\s*<\/packaging>/i.test(buildText);
+	const enterprisePackage = /<packaging>\s*(?:ear|ejb)\s*<\/packaging>|<ejbjar\b|\b(?:id|apply\s+plugin:)\s*\(?\s*['"]ear['"]/i.test(buildText);
+	const warPackage = /<packaging>\s*war\s*<\/packaging>|<war\b|\b(?:id|apply\s+plugin:)\s*\(?\s*['"]war['"]/i.test(buildText);
+	let enterprise = enterprisePackage || framework === 'jakarta-ee' || warPackage;
 	for (const sourceFile of sourceFiles) {
 		const text = await readText(sourceFile.fsPath);
 		const isMain = JAVA_MAIN_PATTERN.test(text) || KOTLIN_MAIN_PATTERN.test(text);
@@ -701,7 +728,8 @@ async function inspectProject(candidate: IProjectCandidate): Promise<IJavaProjec
 		...candidate,
 		name: await projectName(candidate, buildText),
 		framework,
-		enterprise: enterprise || framework === 'jakarta-ee',
+		enterprise: enterprise && (framework !== 'spring-boot' || enterprisePackage),
+		serverDeployable: enterprise || warPackage,
 		springBoot: framework === 'spring-boot',
 		springDevtools: /spring-boot-devtools/.test(buildText),
 		mainClass,
@@ -773,29 +801,15 @@ function qualifiedMainClass(text: string, uri: vscode.Uri): string {
 
 function commandFor(project: IJavaProject, action: Exclude<ProjectAction, 'debug'>): { executable: string; args: string[] } {
 	if (project.buildTool === 'maven') {
-		const wrapper = process.platform === 'win32' ? 'mvnw.cmd' : 'mvnw';
-		const wrapperPath = path.join(project.root.fsPath, wrapper);
 		const goal = action === 'run' ? mavenRunGoal(project) : action === 'build' ? 'package' : 'test';
 		const args = action === 'run' && project.framework === 'java' && project.mainClass
 			? [goal, `-Dexec.mainClass=${project.mainClass}`]
 			: [goal];
-		if (fileExists(wrapperPath)) {
-			return process.platform === 'win32'
-				? { executable: wrapperPath, args }
-				: { executable: '/bin/sh', args: [wrapperPath, ...args] };
-		}
-		return { executable: process.platform === 'win32' ? 'mvn.cmd' : 'mvn', args };
+		return javaBuildCommand(project.root, 'maven', args);
 	}
 	if (project.buildTool === 'gradle') {
-		const wrapper = process.platform === 'win32' ? 'gradlew.bat' : 'gradlew';
-		const wrapperPath = path.join(project.root.fsPath, wrapper);
 		const goal = action === 'run' ? gradleRunGoal(project) : action === 'build' ? 'build' : 'test';
-		if (fileExists(wrapperPath)) {
-			return process.platform === 'win32'
-				? { executable: wrapperPath, args: [goal] }
-				: { executable: '/bin/sh', args: [wrapperPath, goal] };
-		}
-		return { executable: process.platform === 'win32' ? 'gradle.bat' : 'gradle', args: [goal] };
+		return javaBuildCommand(project.root, 'gradle', [goal]);
 	}
 	if (project.buildTool === 'ant') {
 		const preferred = action === 'run' ? ['bootRun', 'run', 'start'] : action === 'build' ? ['build', 'package', 'jar', 'compile'] : ['test'];
@@ -843,16 +857,10 @@ function gradleRunGoal(project: IJavaProject): string {
 
 function incrementalCommandFor(project: IJavaProject): { executable: string; args: string[] } {
 	if (project.buildTool === 'maven') {
-		const wrapperPath = path.join(project.root.fsPath, process.platform === 'win32' ? 'mvnw.cmd' : 'mvnw');
-		return fileExists(wrapperPath)
-			? process.platform === 'win32' ? { executable: wrapperPath, args: ['-DskipTests', 'compile'] } : { executable: '/bin/sh', args: [wrapperPath, '-DskipTests', 'compile'] }
-			: { executable: process.platform === 'win32' ? 'mvn.cmd' : 'mvn', args: ['-DskipTests', 'compile'] };
+		return javaBuildCommand(project.root, 'maven', ['-DskipTests', 'compile']);
 	}
 	if (project.buildTool === 'gradle') {
-		const wrapperPath = path.join(project.root.fsPath, process.platform === 'win32' ? 'gradlew.bat' : 'gradlew');
-		return fileExists(wrapperPath)
-			? process.platform === 'win32' ? { executable: wrapperPath, args: ['classes'] } : { executable: '/bin/sh', args: [wrapperPath, 'classes'] }
-			: { executable: process.platform === 'win32' ? 'gradle.bat' : 'gradle', args: ['classes'] };
+		return javaBuildCommand(project.root, 'gradle', ['classes']);
 	}
 	if (project.buildTool === 'ant') {
 		return { executable: process.platform === 'win32' ? 'ant.bat' : 'ant', args: project.antTargets.has('compile') ? ['compile'] : [] };
@@ -886,10 +894,6 @@ async function readText(filePath: string): Promise<string> {
 	} catch {
 		return '';
 	}
-}
-
-function fileExists(filePath: string): boolean {
-	return existsSync(filePath);
 }
 
 function isWithin(candidate: string, parent: string): boolean {
