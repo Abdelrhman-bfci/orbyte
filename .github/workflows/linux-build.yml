@@ -43,7 +43,7 @@ jobs:
             ca-certificates \
             fakeroot \
             g++ \
-            libasound2 \
+            libasound2t64 \
             libgbm1 \
             libgomp1 \
             libgtk-3-0 \
